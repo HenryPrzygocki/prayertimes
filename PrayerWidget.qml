@@ -34,6 +34,10 @@ PluginComponent {
     property var todayTimes: null
     property var tomorrowTimes: null
     property var sunSamples: []
+    property real arcStart: 0
+    property real arcEnd: 24
+    property real moonPhase: 0
+    property string moonName: ""
     property var prayerAlt: ({})
     property string hijriText: ""
     property string lastComputed: ""
@@ -86,6 +90,8 @@ PluginComponent {
         root.tomorrowTimes = computeFor(new Date(noon.getTime() + 86400000))
         root.hijriText = Calc.formatHijri(
             Calc.hijriDate(now.getFullYear(), now.getMonth() + 1, now.getDate(), root.hijriOffset))
+        root.moonPhase = Calc.moonPhase(now.getFullYear(), now.getMonth() + 1, now.getDate())
+        root.moonName = Calc.moonPhaseName(root.moonPhase)
         root.lastComputed = Qt.formatDate(now, "yyyy-MM-dd")
         updateCountdown()
 
@@ -96,7 +102,12 @@ PluginComponent {
         // and a throw here used to skip the date, the countdown and the handover
         // line, blanking most of the panel with nothing in the log to say why.
         try {
-            root.sunSamples = sampleSun(noon)
+            // The stretch from Isha to the next dawn holds nothing but empty
+            // curve, so the axis stops just outside the prayers and gives the
+            // width to the part of the day that has events in it.
+            root.arcStart = root.todayTimes.fajr - 0.75
+            root.arcEnd = root.todayTimes.isha + 0.75
+            root.sunSamples = sampleSun(noon, root.arcStart, root.arcEnd)
             root.prayerAlt = samplePrayerAltitudes(noon)
         } catch (e) {
             root.sunSamples = []
@@ -108,12 +119,12 @@ PluginComponent {
     // The sun's altitude across the civil day, sampled once when the day rolls
     // over. The arc is then a fixed shape with only the sun moving along it,
     // which keeps the panel calm and lets the eye learn the silhouette.
-    function sampleSun(noon) {
+    function sampleSun(noon, from, to) {
         var o = optionsFor(noon)
         var y = noon.getFullYear(), m = noon.getMonth() + 1, d = noon.getDate()
         var out = []
         for (var i = 0; i <= 144; i++) {
-            var h = i * 24 / 144
+            var h = from + (to - from) * i / 144
             out.push({ h: h, alt: Calc.solarAltitude(y, m, d, h, o) })
         }
         return out
@@ -138,9 +149,9 @@ PluginComponent {
     // depression below the horizon, and sunrise and Maghrib share a coral for
     // the same reason.
     function skyColor(alt) {
-        if (alt >= 45)  return "#E8B33C"   // high sun
-        if (alt >= 15)  return "#E8993C"   // climbing or descending
-        if (alt >= -1)  return "#D9603F"   // at the horizon
+        if (alt >= 50)  return "#F2C14E"   // overhead
+        if (alt >= 20)  return "#E08133"   // climbing or descending
+        if (alt >= -1)  return "#CE5439"   // at the horizon
         if (alt >= -12) return "#7A5E9B"   // civil twilight
         return "#46578F"                   // night
     }
@@ -157,9 +168,8 @@ PluginComponent {
         var t = root.todayTimes
         if (!t) return []
         var out = []
-        var keys = [["Fajr", "fajr"], ["Sunrise", "sunrise"], ["Dhuhr", "dhuhr"],
-                    ["Asr", "asr"], ["Maghrib", "maghrib"], ["Isha", "isha"],
-                    ["Islamic midnight", "midnight"]]
+        var keys = [["Fajr", "fajr"], ["Dhuhr", "dhuhr"], ["Asr", "asr"],
+                    ["Maghrib", "maghrib"], ["Isha", "isha"]]
         for (var i = 0; i < keys.length; i++) {
             var h = t[keys[i][1]]
             var a = root.prayerAlt[keys[i][0]]
@@ -175,9 +185,15 @@ PluginComponent {
     readonly property real altitudeNow: {
         var s = root.sunSamples
         if (!s || s.length === 0) return 0
-        var h = nowHours()
-        var i = Math.max(0, Math.min(s.length - 1, Math.round(h / 24 * (s.length - 1))))
+        var f = (nowHours() - root.arcStart) / (root.arcEnd - root.arcStart)
+        var i = Math.max(0, Math.min(s.length - 1, Math.round(f * (s.length - 1))))
         return s[i].alt
+    }
+
+    // True through the deep night, when the sun sits outside the cropped axis.
+    readonly property bool sunOffArc: {
+        var h = nowHours()
+        return h < root.arcStart || h > root.arcEnd
     }
 
     // === Prayer periods ===
@@ -404,6 +420,67 @@ PluginComponent {
     }
 
     // Horizontal bar pill:
+    // The moon as it actually looks tonight. Drawn rather than picked from a
+    // set of glyphs, because the terminator is a smooth function of the phase
+    // and a handful of fixed icons would quantise it. It sits beside the Hijri
+    // date because that calendar counts exactly this.
+    component MoonPhase: Item {
+        id: moon
+        implicitWidth: 15
+        implicitHeight: 15
+
+        Connections {
+            target: root
+            function onMoonPhaseChanged() { moonCanvas.requestPaint() }
+        }
+        Component.onCompleted: moonCanvas.requestPaint()
+
+        Canvas {
+            id: moonCanvas
+            anchors.fill: parent
+            onAvailableChanged: if (available) requestPaint()
+
+            onPaint: {
+                var ctx = getContext("2d")
+                ctx.reset()
+                var r = Math.min(width, height) / 2 - 0.5
+                var cx = width / 2, cy = height / 2
+                var p = root.moonPhase
+                var k = Math.cos(2 * Math.PI * p)      // +1 new, -1 full
+                var lit = (1 - k) / 2
+                var waxing = p < 0.5
+
+                var dark = Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g,
+                                   Theme.surfaceText.b, 0.16)
+                var light = Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g,
+                                    Theme.surfaceText.b, 0.72)
+
+                ctx.fillStyle = dark
+                ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2 * Math.PI); ctx.fill()
+
+                // The lit half, then the terminator ellipse over it: dark when a
+                // crescent, light when gibbous.
+                ctx.fillStyle = light
+                ctx.beginPath()
+                ctx.arc(cx, cy, r, -Math.PI / 2, Math.PI / 2, !waxing)
+                ctx.closePath()
+                ctx.fill()
+
+                ctx.fillStyle = lit > 0.5 ? light : dark
+                ctx.save()
+                ctx.translate(cx, cy)
+                ctx.scale(Math.max(0.001, Math.abs(k)), 1)
+                ctx.beginPath(); ctx.arc(0, 0, r, 0, 2 * Math.PI); ctx.fill()
+                ctx.restore()
+
+                ctx.strokeStyle = Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g,
+                                          Theme.surfaceText.b, 0.22)
+                ctx.lineWidth = 0.75
+                ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2 * Math.PI); ctx.stroke()
+            }
+        }
+    }
+
     // The arc the sun walks today, sampled from the same ephemeris the prayer
     // times are cut from. It answers one question -- where the sun is -- so it
     // carries no progress encoding; the span bar above owns that.
@@ -415,9 +492,9 @@ PluginComponent {
     component SunPath: Item {
         id: sky
 
-        readonly property int padX: 10
-        readonly property real horizonY: 58
-        readonly property real nightDepth: 28
+        readonly property int padX: 14
+        readonly property real horizonY: 56
+        readonly property real nightDepth: 18
 
         function repaint() { skyCanvas.requestPaint() }
 
@@ -432,12 +509,16 @@ PluginComponent {
         }
 
         function xFor(hr) {
-            return sky.padX + (hr / 24) * (sky.width - 2 * sky.padX)
+            var f = (hr - root.arcStart) / (root.arcEnd - root.arcStart)
+            return sky.padX + f * (sky.width - 2 * sky.padX)
         }
 
         Canvas {
             id: skyCanvas
-            anchors.fill: parent
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            height: sky.horizonY + sky.nightDepth + 2
             onAvailableChanged: if (available) requestPaint()
 
             onPaint: {
@@ -516,42 +597,76 @@ PluginComponent {
                     ctx.fill()
                 }
 
+                // Sunrise is not a prayer, so it is marked differently: a tick
+                // through the horizon rather than a point on the path.
+                var t = root.todayTimes
+                if (t) {
+                    ctx.strokeStyle = Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g,
+                                              Theme.surfaceText.b, 0.45)
+                    ctx.lineWidth = 1
+                    ctx.beginPath()
+                    ctx.moveTo(sky.xFor(t.sunrise), hz - 5)
+                    ctx.lineTo(sky.xFor(t.sunrise), hz + 5)
+                    ctx.stroke()
+                    ctx.beginPath()
+                    ctx.moveTo(sky.xFor(t.maghrib), hz - 5)
+                    ctx.lineTo(sky.xFor(t.maghrib), hz + 5)
+                    ctx.stroke()
+                }
+
                 // Where the sun is now.
                 var nowAlt = root.altitudeNow
-                var sx = sky.xFor(root.nowHours()), sy = py(nowAlt)
+                var nowH = Math.max(root.arcStart, Math.min(root.arcEnd, root.nowHours()))
+                var sx = sky.xFor(nowH), sy = py(nowAlt)
                 var c = root.skyColor(nowAlt)
                 ctx.fillStyle = c
                 ctx.strokeStyle = c
-                ctx.globalAlpha = 0.25
+                ctx.globalAlpha = root.sunOffArc ? 0.12 : 0.25
                 ctx.beginPath(); ctx.arc(sx, sy, 11, 0, 2 * Math.PI); ctx.fill()
-                ctx.globalAlpha = 1
+                ctx.globalAlpha = root.sunOffArc ? 0.5 : 1
                 if (nowAlt >= 0) {
                     ctx.beginPath(); ctx.arc(sx, sy, 5.5, 0, 2 * Math.PI); ctx.fill()
                 } else {
                     ctx.lineWidth = 1.8
                     ctx.beginPath(); ctx.arc(sx, sy, 4.5, 0, 2 * Math.PI); ctx.stroke()
                 }
+                ctx.globalAlpha = 1
             }
         }
 
         // The two horizon crossings, set inside the arc where nothing else is,
         // and thirteen hours apart so they cannot collide with each other.
-        StyledText {
-            x: Math.min(sky.width - width, sky.xFor(root.todayTimes ? root.todayTimes.sunrise : 6) + 6)
-            y: sky.horizonY - 15
-            text: root.todayTimes ? root.formatTime(root.hhmm(root.todayTimes.sunrise)) : ""
-            font.pixelSize: Theme.fontSizeSmall - 1
-            color: Theme.surfaceVariantText
-            visible: root.todayTimes !== null
-        }
+        // Below the arc, where nothing can overlap them. They label the two
+        // horizon crossings, which is what gives the curve its scale.
+        Repeater {
+            model: root.todayTimes ? [
+                { t: root.todayTimes.sunrise, caption: "sunrise" },
+                { t: root.todayTimes.maghrib, caption: "sunset" }
+            ] : []
 
-        StyledText {
-            x: Math.max(0, sky.xFor(root.todayTimes ? root.todayTimes.maghrib : 18) - width - 6)
-            y: sky.horizonY - 15
-            text: root.todayTimes ? root.formatTime(root.hhmm(root.todayTimes.maghrib)) : ""
-            font.pixelSize: Theme.fontSizeSmall - 1
-            color: Theme.surfaceVariantText
-            visible: root.todayTimes !== null
+            delegate: Column {
+                required property var modelData
+                width: 48
+                spacing: 0
+                x: Math.max(0, Math.min(sky.width - width, sky.xFor(modelData.t) - width / 2))
+                y: sky.horizonY + sky.nightDepth + 6
+
+                StyledText {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: root.formatTime(root.hhmm(modelData.t))
+                    font.pixelSize: Theme.fontSizeSmall - 1
+                    color: Theme.surfaceText
+                    opacity: 0.8
+                }
+
+                StyledText {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: modelData.caption
+                    font.pixelSize: Theme.fontSizeSmall - 2
+                    color: Theme.surfaceVariantText
+                    opacity: 0.6
+                }
+            }
         }
 
     }
@@ -653,16 +768,37 @@ PluginComponent {
                 // --- Date ---
                 Item {
                     width: content.width
-                    height: Math.max(hijriLabel.implicitHeight, refreshPill.height)
+                    height: Math.max(hijriLabel.height, refreshPill.height)
 
-                    StyledText {
+                    Row {
                         id: hijriLabel
                         anchors.left: parent.left
                         anchors.verticalCenter: parent.verticalCenter
-                        text: root.hijriText
-                        font.pixelSize: Theme.fontSizeMedium
-                        font.weight: Font.DemiBold
-                        color: Theme.surfaceText
+                        spacing: Theme.spacingXS
+
+                        MoonPhase {
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+
+                        StyledText {
+                            text: root.hijriText
+                            font.pixelSize: Theme.fontSizeMedium
+                            font.weight: Font.DemiBold
+                            color: Theme.surfaceText
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                    }
+
+                    StyledText {
+                        anchors.left: hijriLabel.right
+                        anchors.leftMargin: Theme.spacingS
+                        anchors.baseline: hijriLabel.top
+                        anchors.baselineOffset: hijriLabel.height / 2 + 4
+                        text: root.moonName
+                        font.pixelSize: Theme.fontSizeSmall - 2
+                        color: Theme.surfaceVariantText
+                        opacity: 0.6
+                        visible: width + hijriLabel.width + 40 < parent.width
                     }
 
                     Rectangle {
@@ -866,7 +1002,7 @@ PluginComponent {
                 // --- Where the sun is ---
                 SunPath {
                     width: content.width
-                    height: 92
+                    height: 98
                     visible: root.sunSamples.length > 0
                 }
 

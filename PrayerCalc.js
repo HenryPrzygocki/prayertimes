@@ -233,6 +233,33 @@ function solarAltitude(year, month, day, hourLocal, opts) {
                + dcos(lat) * dcos(sp.decl) * dcos(H))
 }
 
+// === Moon ===
+// Phase as a fraction of the synodic month: 0 new, 0.5 full. Measured from a
+// known new moon, which is accurate to a few hours over a century -- far finer
+// than the day-level resolution anything here displays. The Hijri calendar is
+// lunar, so this is the shape the date is counting.
+function moonPhase(gy, gm, gd) {
+    var days = (julianDay(gy, gm, gd) + 0.5) - 2451550.1
+    var p = (days / 29.530588853) % 1
+    return p < 0 ? p + 1 : p
+}
+
+// Fraction of the disc lit, 0 to 1.
+function moonIllumination(phase) {
+    return (1 - Math.cos(2 * Math.PI * phase)) / 2
+}
+
+function moonPhaseName(phase) {
+    if (phase < 0.02 || phase > 0.98) return "New moon"
+    if (phase < 0.23) return "Waxing crescent"
+    if (phase < 0.27) return "First quarter"
+    if (phase < 0.48) return "Waxing gibbous"
+    if (phase < 0.52) return "Full moon"
+    if (phase < 0.73) return "Waning gibbous"
+    if (phase < 0.77) return "Last quarter"
+    return "Waning crescent"
+}
+
 // === Hijri calendar ===
 // Tabular (arithmetical) Islamic calendar, the same civil reckoning Aladhan
 // serves by default. It is a fixed 30-year cycle of 11 leap years, so it can
