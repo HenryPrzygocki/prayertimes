@@ -181,13 +181,13 @@ PluginComponent {
     // noon and dimmest at night. It ties each row in the list to its band on the
     // strip without introducing a second palette to fight the theme.
     function daypartColor(name) {
-        var a = name === "Dhuhr"    ? 0.85
-              : name === "Asr"      ? 0.65
-              : name === "Sunrise"  ? 0.55
-              : name === "Maghrib"  ? 0.45
-              : name === "Fajr"     ? 0.32
-              : name === "Isha"     ? 0.26
-              : 0.18
+        var a = name === "Dhuhr"    ? 0.95
+              : name === "Asr"      ? 0.80
+              : name === "Sunrise"  ? 0.70
+              : name === "Maghrib"  ? 0.62
+              : name === "Fajr"     ? 0.50
+              : name === "Isha"     ? 0.44
+              : 0.34
         return Qt.rgba(accentColor.r, accentColor.g, accentColor.b, a)
     }
 
@@ -338,21 +338,28 @@ PluginComponent {
 
     // === Prayer icons ===
     // With the prayer's name gone from the bar, the symbol is the only thing
-    // identifying it, so all seven are visually distinct. Asr gets the shade
-    // glyph because it is the one prayer defined by shadow length rather than
-    // by the sun's altitude.
+    // identifying it. Rather than hunt for six unrelated glyphs, the pairs are
+    // separated on the font's FILL axis: the same sun solid at noon and hollow
+    // in the afternoon, the same horizon hollow at sunrise and solid at sunset.
+    // One symbol, two strengths -- which is the actual difference between them.
     property var prayerIcons: ({
-        "Fajr":     "moon_stars",
-        "Sunrise":  "clear_day",
-        "Dhuhr":    "wb_sunny",
-        "Asr":      "wb_iridescent",
-        "Maghrib":  "wb_twilight",
-        "Isha":     "bedtime",
-        "Midnight": "dark_mode"
+        "Fajr":     { name: "moon_stars",  fill: 0.0 },
+        "Sunrise":  { name: "wb_twilight", fill: 0.0 },
+        "Dhuhr":    { name: "wb_sunny",    fill: 1.0 },
+        "Asr":      { name: "wb_sunny",    fill: 0.0 },
+        "Maghrib":  { name: "wb_twilight", fill: 1.0 },
+        "Isha":     { name: "bedtime",     fill: 1.0 },
+        "Midnight": { name: "dark_mode",   fill: 0.0 }
     })
 
     function getPrayerIcon(name) {
-        return root.prayerIcons[name] || "mosque"
+        var i = root.prayerIcons[name]
+        return i ? i.name : "mosque"
+    }
+
+    function getPrayerFill(name) {
+        var i = root.prayerIcons[name]
+        return i ? i.fill : 0.0
     }
 
     // Horizontal bar pill:
@@ -401,6 +408,7 @@ PluginComponent {
         DankIcon {
             anchors.centerIn: parent
             name: root.getPrayerIcon(root.nextName)
+            fill: root.getPrayerFill(root.nextName)
             size: ring.diameter - 5
             color: ring.arcColor
         }
@@ -425,6 +433,7 @@ PluginComponent {
                 visible: root.pillStyle !== "arc"
                 width: visible ? implicitWidth : 0
                 name: root.getPrayerIcon(root.nextName)
+                fill: root.getPrayerFill(root.nextName)
                 size: Theme.iconSize - 6
                 color: root.isUrgent ? root.accentColor : Theme.surfaceText
                 anchors.verticalCenter: parent.verticalCenter
@@ -463,6 +472,7 @@ PluginComponent {
                 visible: root.pillStyle !== "arc"
                 height: visible ? implicitHeight : 0
                 name: root.getPrayerIcon(root.nextName)
+                fill: root.getPrayerFill(root.nextName)
                 size: Theme.iconSize - 6
                 color: root.isUrgent ? root.accentColor : Theme.surfaceText
                 anchors.horizontalCenter: parent.horizontalCenter
@@ -581,6 +591,7 @@ PluginComponent {
                                     visible: !stateCol.inGap
                                     width: visible ? implicitWidth : 0
                                     name: stateCol.span ? root.getPrayerIcon(stateCol.span.name) : "mosque"
+                                    fill: stateCol.span ? root.getPrayerFill(stateCol.span.name) : 0.0
                                     size: Theme.iconSize - 6
                                     color: Theme.surfaceText
                                     anchors.verticalCenter: parent.verticalCenter
@@ -680,8 +691,15 @@ PluginComponent {
                             horizontalAlignment: Text.AlignHCenter
                             text: {
                                 if (root.schedule.length === 0) return ""
-                                var handover = "then " + root.nextName
-                                            + " at " + root.formatTime(root.hhmm(root.nextAt))
+                                // The span's right-hand label already carries
+                                // this instant whenever the window hands straight
+                                // over, which is four prayers in five.
+                                var span = root.activeSpan
+                                var alreadyShown = span && Math.abs(span.end - root.nextAt) < 1 / 120
+                                var handover = alreadyShown
+                                             ? ("then " + root.nextName)
+                                             : ("then " + root.nextName + " at "
+                                                + root.formatTime(root.hhmm(root.nextAt)))
                                 var w = root.currentWindow
                                 if (w && w.preferredEnd !== undefined) {
                                     if (root.preferredRemainingSec <= 0)
@@ -704,15 +722,15 @@ PluginComponent {
                 // and the morning gap shows up as bare track.
                 Item {
                     width: content.width
-                    height: 14
+                    height: 16
                     visible: root.dayBands.length > 0
 
                     Rectangle {
                         anchors.left: parent.left
                         anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
-                        height: 8
-                        radius: 4
+                        height: 10
+                        radius: 5
                         color: Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.08)
                     }
 
@@ -724,9 +742,11 @@ PluginComponent {
                             readonly property bool isCurrent: root.currentWindow !== null
                                                               && root.currentWindow.name === modelData.name
                             x: (modelData.start - root.dayStart) / root.daySpan * parent.width
-                            width: Math.max(2, (modelData.end - modelData.start) / root.daySpan * parent.width)
-                            height: 8
-                            radius: 4
+                            // A hairline short of the true width, so adjacent
+                            // bands read as separate spans rather than one smear.
+                            width: Math.max(2, (modelData.end - modelData.start) / root.daySpan * parent.width - 1.5)
+                            height: 10
+                            radius: 5
                             anchors.verticalCenter: parent.verticalCenter
                             color: isCurrent ? root.accentColor : root.daypartColor(modelData.name)
                         }
