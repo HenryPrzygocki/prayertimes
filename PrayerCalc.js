@@ -1,5 +1,6 @@
 .pragma library
 
+
 // Local prayer-time computation. Replaces the Aladhan HTTP API with the same
 // underlying algorithm (Zarrabi-Zadeh / PrayTimes), so no network is involved.
 //
