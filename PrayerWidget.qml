@@ -177,6 +177,12 @@ PluginComponent {
         return Math.round((w.preferredEnd - nowHours()) * 3600)
     }
 
+    readonly property string spanSymbol: {
+        var w = activeSpan
+        if (!w) return nextName
+        return (w.gap || w.name === "") ? nextName : w.name
+    }
+
     // A single hue carried at different strengths across the day, brightest at
     // noon and dimmest at night. It ties each row in the list to its band on the
     // strip without introducing a second palette to fight the theme.
@@ -368,7 +374,7 @@ PluginComponent {
     // the exact figure for a smaller, more glanceable pill.
     component PrayerRing: Item {
         id: ring
-        property real fraction: root.progressToNext
+        property real fraction: root.spanProgress
         property color arcColor: root.isUrgent ? root.accentColor : Theme.surfaceText
 
         // Must sit inside the bar pill's own padding, so it is driven by the
@@ -379,10 +385,14 @@ PluginComponent {
 
         onFractionChanged: arcCanvas.requestPaint()
         onArcColorChanged: arcCanvas.requestPaint()
+        onWidthChanged: arcCanvas.requestPaint()
+        onVisibleChanged: if (visible) arcCanvas.requestPaint()
+        Component.onCompleted: arcCanvas.requestPaint()
 
         Canvas {
             id: arcCanvas
             anchors.fill: parent
+            onAvailableChanged: if (available) requestPaint()
             onPaint: {
                 var ctx = getContext("2d")
                 ctx.reset()
@@ -407,8 +417,8 @@ PluginComponent {
 
         DankIcon {
             anchors.centerIn: parent
-            name: root.getPrayerIcon(root.nextName)
-            fill: root.getPrayerFill(root.nextName)
+            name: root.getPrayerIcon(root.spanSymbol)
+            fill: root.getPrayerFill(root.spanSymbol)
             size: ring.diameter - 5
             color: ring.arcColor
         }
@@ -432,8 +442,8 @@ PluginComponent {
             DankIcon {
                 visible: root.pillStyle !== "arc"
                 width: visible ? implicitWidth : 0
-                name: root.getPrayerIcon(root.nextName)
-                fill: root.getPrayerFill(root.nextName)
+                name: root.getPrayerIcon(root.spanSymbol)
+                fill: root.getPrayerFill(root.spanSymbol)
                 size: Theme.iconSize - 6
                 color: root.isUrgent ? root.accentColor : Theme.surfaceText
                 anchors.verticalCenter: parent.verticalCenter
@@ -445,7 +455,7 @@ PluginComponent {
                 visible: !root.iconOnly
                 width: visible ? implicitWidth : 0
                 text: root.schedule.length > 0
-                      ? root.formatCountdown(root.nextTotalSeconds)
+                      ? root.formatCountdown(root.spanRemainingSec)
                       : "\u2026"
                 font.pixelSize: Theme.fontSizeSmall
                 font.weight: root.isUrgent ? Font.Bold : Font.Normal
@@ -471,8 +481,8 @@ PluginComponent {
             DankIcon {
                 visible: root.pillStyle !== "arc"
                 height: visible ? implicitHeight : 0
-                name: root.getPrayerIcon(root.nextName)
-                fill: root.getPrayerFill(root.nextName)
+                name: root.getPrayerIcon(root.spanSymbol)
+                fill: root.getPrayerFill(root.spanSymbol)
                 size: Theme.iconSize - 6
                 color: root.isUrgent ? root.accentColor : Theme.surfaceText
                 anchors.horizontalCenter: parent.horizontalCenter
@@ -483,7 +493,7 @@ PluginComponent {
             StyledText {
                 visible: root.schedule.length > 0
                 height: visible ? implicitHeight : 0
-                text: root.formatCountdown(root.nextTotalSeconds)
+                text: root.formatCountdown(root.spanRemainingSec)
                 font.pixelSize: Theme.fontSizeSmall - 2
                 color: root.isUrgent ? root.accentColor : Theme.surfaceText
                 anchors.horizontalCenter: parent.horizontalCenter
