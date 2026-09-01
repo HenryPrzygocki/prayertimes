@@ -24,7 +24,7 @@ PluginComponent {
     property bool iconOnly: pluginData.iconOnly ?? false
     property bool showSeconds: pluginData.showSeconds ?? false
     property bool use12H: pluginData.use12H ?? false
-    property string pillStyle: pluginData.pillStyle || "countdown"
+    property bool showPillProgress: pluginData.showPillProgress ?? true
 
     // === Computed state ===
     // Times are fractional hours in local civil time. Tomorrow is needed because
@@ -33,6 +33,8 @@ PluginComponent {
     property var yesterdayTimes: null
     property var todayTimes: null
     property var tomorrowTimes: null
+    property var sunSamples: []
+    property var prayerAlt: ({})
     property string hijriText: ""
     property string lastComputed: ""
 
@@ -82,10 +84,94 @@ PluginComponent {
         root.yesterdayTimes = computeFor(new Date(noon.getTime() - 86400000))
         root.todayTimes = computeFor(noon)
         root.tomorrowTimes = computeFor(new Date(noon.getTime() + 86400000))
+        root.sunSamples = sampleSun(noon)
+        root.prayerAlt = samplePrayerAltitudes(noon)
         root.hijriText = Calc.formatHijri(
             Calc.hijriDate(now.getFullYear(), now.getMonth() + 1, now.getDate(), root.hijriOffset))
         root.lastComputed = Qt.formatDate(now, "yyyy-MM-dd")
         updateCountdown()
+    }
+
+    // The sun's altitude across the civil day, sampled once when the day rolls
+    // over. The arc is then a fixed shape with only the sun moving along it,
+    // which keeps the panel calm and lets the eye learn the silhouette.
+    function sampleSun(noon) {
+        var o = optionsFor(noon)
+        var y = noon.getFullYear(), m = noon.getMonth() + 1, d = noon.getDate()
+        var out = []
+        for (var i = 0; i <= 144; i++) {
+            var h = i * 24 / 144
+            out.push({ h: h, alt: Calc.solarAltitude(y, m, d, h, o) })
+        }
+        return out
+    }
+
+    function samplePrayerAltitudes(noon) {
+        var t = root.todayTimes
+        if (!t) return ({})
+        var o = optionsFor(noon)
+        var y = noon.getFullYear(), m = noon.getMonth() + 1, d = noon.getDate()
+        var out = {}
+        var keys = { Fajr: "fajr", Sunrise: "sunrise", Dhuhr: "dhuhr", Asr: "asr",
+                     Maghrib: "maghrib", Isha: "isha", Midnight: "midnight" }
+        for (var name in keys)
+            out[name] = Calc.solarAltitude(y, m, d, t[keys[name]], o)
+        return out
+    }
+
+    // Colour taken from where the sun actually is. Every prayer is defined by a
+    // solar altitude, so this is not decoration mapped onto the data -- it is the
+    // data. Fajr and Isha come out the same indigo because they sit at the same
+    // depression below the horizon, and sunrise and Maghrib share a coral for
+    // the same reason.
+    function skyColor(alt) {
+        if (alt >= 45)  return "#E8B33C"   // high sun
+        if (alt >= 15)  return "#E8993C"   // climbing or descending
+        if (alt >= -1)  return "#D9603F"   // at the horizon
+        if (alt >= -12) return "#7A5E9B"   // civil twilight
+        return "#46578F"                   // night
+    }
+
+    function prayerColor(name) {
+        var a = root.prayerAlt[name]
+        return a === undefined ? Theme.surfaceVariantText : skyColor(a)
+    }
+
+    // Prayer instants paired with the altitude that defines them, for plotting.
+    readonly property var dayMarks: {
+        var t = root.todayTimes
+        if (!t) return []
+        var out = []
+        var keys = [["Fajr", "fajr"], ["Sunrise", "sunrise"], ["Dhuhr", "dhuhr"],
+                    ["Asr", "asr"], ["Maghrib", "maghrib"], ["Isha", "isha"]]
+        for (var i = 0; i < keys.length; i++) {
+            var h = t[keys[i][1]]
+            if (h === undefined || isNaN(h)) continue
+            out.push({ name: keys[i][0], h: h % 24, alt: root.prayerAlt[keys[i][0]] })
+        }
+        return out
+    }
+
+    readonly property real longestWindow: {
+        var w = root.windows
+        var m = 0
+        for (var i = 0; i < w.length; i++) m = Math.max(m, w[i].end - w[i].start)
+        return m > 0 ? m : 1
+    }
+
+    function windowLength(name) {
+        var w = root.windows
+        for (var i = 0; i < w.length; i++)
+            if (w[i].name === name) return w[i].end - w[i].start
+        return 0
+    }
+
+    readonly property real altitudeNow: {
+        var s = root.sunSamples
+        if (!s || s.length === 0) return 0
+        var h = nowHours()
+        var i = Math.max(0, Math.min(s.length - 1, Math.round(h / 24 * (s.length - 1))))
+        return s[i].alt
     }
 
     // === Prayer periods ===
@@ -183,63 +269,10 @@ PluginComponent {
         return (w.gap || w.name === "") ? nextName : w.name
     }
 
-    // A single hue carried at different strengths across the day, brightest at
-    // noon and dimmest at night. It ties each row in the list to its band on the
-    // strip without introducing a second palette to fight the theme.
-    function daypartColor(name) {
-        var a = name === "Dhuhr"    ? 0.95
-              : name === "Asr"      ? 0.80
-              : name === "Sunrise"  ? 0.70
-              : name === "Maghrib"  ? 0.62
-              : name === "Fajr"     ? 0.50
-              : name === "Isha"     ? 0.44
-              : 0.34
-        return Qt.rgba(accentColor.r, accentColor.g, accentColor.b, a)
-    }
 
-    // The day as a strip: each prayer window as a proportional band running from
-    // today's dawn to tomorrow's. The sunrise-to-Dhuhr gap is deliberately left
-    // as bare track, so the one stretch with no prayer due is visible as a hole.
-    readonly property var dayBands: {
-        if (!todayTimes || !tomorrowTimes) return []
-        var t = todayTimes
-        return [
-            { name: "Fajr",    start: t.fajr,    end: t.sunrise },
-            { name: "Dhuhr",   start: t.dhuhr,   end: t.asr },
-            { name: "Asr",     start: t.asr,     end: t.maghrib },
-            { name: "Maghrib", start: t.maghrib, end: t.isha },
-            { name: "Isha",    start: t.isha,    end: tomorrowTimes.fajr + 24 }
-        ]
-    }
 
-    readonly property real dayStart: todayTimes ? todayTimes.fajr : 0
-    readonly property real daySpan: (todayTimes && tomorrowTimes)
-                                  ? (tomorrowTimes.fajr + 24 - todayTimes.fajr) : 24
 
-    // Position of "now" along that strip, clamped for the pre-dawn hours which
-    // belong to the previous cycle.
-    readonly property real dayProgress: {
-        if (!todayTimes) return 0
-        return Math.max(0, Math.min(1, (nowHours() - dayStart) / daySpan))
-    }
 
-    // How far through the gap between the last prayer and the next we are, for
-    // the ring style of the bar pill.
-    readonly property real progressToNext: {
-        var s = root.schedule
-        if (s.length === 0) return 0
-        var h = nowHours()
-        var prev = null, next = null
-        for (var i = 0; i < s.length; i++)
-            if (s[i].at > h) { next = s[i]; prev = i > 0 ? s[i - 1] : null; break }
-        if (!next) return 0
-        // Before today's Fajr the interval opened with yesterday's Isha.
-        var start = prev ? prev.at
-                  : (yesterdayTimes ? yesterdayTimes.isha - 24 : next.at - 1)
-        var span = next.at - start
-        if (span <= 0) return 0
-        return Math.max(0, Math.min(1, (h - start) / span))
-    }
 
     function nowHours() {
         var d = clock.date
@@ -295,21 +328,17 @@ PluginComponent {
         return "under a minute"
     }
 
-    function formatCountdown(totalSeconds) {
-        if (totalSeconds <= 0) return root.showSeconds ? "00:00" : "0 min"
-        var h  = Math.floor(totalSeconds / 3600)
-        var m  = Math.floor((totalSeconds % 3600) / 60)
-        var s  = totalSeconds % 60
-        if (root.showSeconds) {
-            var mm = (m < 10 ? "0" : "") + m
-            var ss = (s < 10 ? "0" : "") + s
-            if (h > 0) return (h < 10 ? "0" : "") + h + ":" + mm + ":" + ss
-            return mm + ":" + ss
-        }
-        var mm2 = (m < 10 ? "0" : "") + m
-        if (h > 0) return (h < 10 ? "0" : "") + h + ":" + mm2
-        return m + " min"
+    // "02:01" reads as a clock time, which is exactly what it is not. Units
+    // remove the ambiguity at a glance and cost two characters.
+    function formatSplit(totalSeconds) {
+        var s = Math.max(0, totalSeconds)
+        var h = Math.floor(s / 3600)
+        var m = Math.floor((s % 3600) / 60)
+        if (h > 0) return h + "h " + (m < 10 ? "0" : "") + m + "m"
+        if (root.showSeconds) return m + "m " + ((s % 60) < 10 ? "0" : "") + (s % 60) + "s"
+        return m + "m"
     }
+
 
 
     // === Lifecycle ===
@@ -369,122 +398,226 @@ PluginComponent {
     }
 
     // Horizontal bar pill:
-    // Two ways to render the same fact. "countdown" spells the time left out;
-    // "arc" draws it as a ring filling between one prayer and the next, trading
-    // the exact figure for a smaller, more glanceable pill.
-    component PrayerRing: Item {
-        id: ring
-        property real fraction: root.spanProgress
-        property color arcColor: root.isUrgent ? root.accentColor : Theme.surfaceText
+    // The arc the sun actually walks today, sampled from the same ephemeris the
+    // prayer times are cut from. The prayers are drawn as points on it, because
+    // that is literally what they are: the instants the sun crosses a given
+    // altitude. Sunrise and Maghrib are where the curve meets the horizon, so
+    // the scale explains itself without a legend.
+    component SunPath: Item {
+        id: sky
 
-        // Must sit inside the bar pill's own padding, so it is driven by the
-        // bar's thickness rather than by the icon size.
-        readonly property int diameter: Math.max(16, Math.min(Theme.iconSize + 2, root.widgetThickness - 8))
-        implicitWidth: diameter
-        implicitHeight: diameter
+        readonly property real horizonFrac: 0.66   // where 0 degrees sits vertically
+        readonly property int padX: 10
 
-        onFractionChanged: arcCanvas.requestPaint()
-        onArcColorChanged: arcCanvas.requestPaint()
-        onWidthChanged: arcCanvas.requestPaint()
-        onVisibleChanged: if (visible) arcCanvas.requestPaint()
-        Component.onCompleted: arcCanvas.requestPaint()
+        function repaint() { skyCanvas.requestPaint() }
+
+        Component.onCompleted: repaint()
+        onWidthChanged: repaint()
+        onHeightChanged: repaint()
+        onVisibleChanged: if (visible) repaint()
+
+        Connections {
+            target: root
+            function onSunSamplesChanged() { sky.repaint() }
+            function onSpanProgressChanged() { sky.repaint() }
+        }
 
         Canvas {
-            id: arcCanvas
+            id: skyCanvas
             anchors.fill: parent
             onAvailableChanged: if (available) requestPaint()
+
             onPaint: {
                 var ctx = getContext("2d")
                 ctx.reset()
-                var cx = width / 2, cy = height / 2, r = width / 2 - 1.5
-                ctx.lineWidth = 2
-                ctx.lineCap = "round"
+
+                var samples = root.sunSamples
+                if (!samples || samples.length === 0) return
+
+                var w = width, h = height
+                var x0 = sky.padX, x1 = w - sky.padX
+                var horizonY = h * sky.horizonFrac
+
+                var maxAlt = -90, minAlt = 90
+                for (var i = 0; i < samples.length; i++) {
+                    if (samples[i].alt > maxAlt) maxAlt = samples[i].alt
+                    if (samples[i].alt < minAlt) minAlt = samples[i].alt
+                }
+                if (maxAlt <= 0) maxAlt = 1
+                if (minAlt >= 0) minAlt = -1
+
+                function px(hr) { return x0 + (hr / 24) * (x1 - x0) }
+                function py(alt) {
+                    return alt >= 0
+                         ? horizonY - (alt / maxAlt) * (horizonY - 8)
+                         : horizonY + (alt / minAlt) * (h - 10 - horizonY)
+                }
+
+                // Ground: everything below the horizon, so night reads as night.
+                ctx.fillStyle = Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g,
+                                        Theme.surfaceText.b, 0.05)
+                ctx.fillRect(0, horizonY, w, h - horizonY)
+
                 ctx.strokeStyle = Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g,
-                                          Theme.surfaceText.b, 0.18)
+                                          Theme.surfaceText.b, 0.22)
+                ctx.lineWidth = 1
                 ctx.beginPath()
-                ctx.arc(cx, cy, r, 0, 2 * Math.PI)
+                ctx.moveTo(0, horizonY + 0.5)
+                ctx.lineTo(w, horizonY + 0.5)
                 ctx.stroke()
 
-                if (ring.fraction > 0) {
-                    ctx.strokeStyle = ring.arcColor
+                // The curve, coloured by where the sun is as it goes.
+                ctx.lineWidth = 2
+                ctx.lineCap = "round"
+                for (var j = 1; j < samples.length; j++) {
+                    ctx.strokeStyle = root.skyColor((samples[j].alt + samples[j - 1].alt) / 2)
+                    ctx.globalAlpha = samples[j].h <= root.nowHours() ? 1.0 : 0.30
                     ctx.beginPath()
-                    ctx.arc(cx, cy, r, -Math.PI / 2,
-                            -Math.PI / 2 + 2 * Math.PI * ring.fraction)
+                    ctx.moveTo(px(samples[j - 1].h), py(samples[j - 1].alt))
+                    ctx.lineTo(px(samples[j].h), py(samples[j].alt))
                     ctx.stroke()
                 }
+                ctx.globalAlpha = 1.0
+
+                // Islamic midnight, the one marker with no visible counterpart
+                // on the curve, as a hairline down to the baseline.
+                var t = root.todayTimes
+                if (t) {
+                    var mx = px(t.midnight < 12 ? t.midnight : t.midnight - 24)
+                    ctx.strokeStyle = Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g,
+                                              Theme.surfaceText.b, 0.30)
+                    ctx.lineWidth = 1
+                    ctx.setLineDash([2, 2])
+                    ctx.beginPath()
+                    ctx.moveTo(mx, horizonY)
+                    ctx.lineTo(mx, h - 2)
+                    ctx.stroke()
+                    ctx.setLineDash([])
+                }
+
+                // Each prayer as a point on the path.
+                var marks = root.dayMarks
+                for (var k = 0; k < marks.length; k++) {
+                    var mk = marks[k]
+                    var cx = px(mk.h), cy = py(mk.alt)
+                    ctx.fillStyle = root.skyColor(mk.alt)
+                    ctx.beginPath()
+                    ctx.arc(cx, cy, 2.6, 0, 2 * Math.PI)
+                    ctx.fill()
+                }
+
+                // Where the sun is now: a filled disc above the horizon, a ring
+                // below it, so day and night are distinguishable at a glance.
+                var nowH = root.nowHours()
+                var nowAlt = root.altitudeNow
+                var sx = px(nowH), sy = py(nowAlt)
+                ctx.fillStyle = root.skyColor(nowAlt)
+                ctx.strokeStyle = root.skyColor(nowAlt)
+                ctx.lineWidth = 2
+                if (nowAlt >= 0) {
+                    ctx.globalAlpha = 0.22
+                    ctx.beginPath(); ctx.arc(sx, sy, 9, 0, 2 * Math.PI); ctx.fill()
+                    ctx.globalAlpha = 1
+                    ctx.beginPath(); ctx.arc(sx, sy, 4.5, 0, 2 * Math.PI); ctx.fill()
+                } else {
+                    ctx.globalAlpha = 0.18
+                    ctx.beginPath(); ctx.arc(sx, sy, 9, 0, 2 * Math.PI); ctx.fill()
+                    ctx.globalAlpha = 1
+                    ctx.beginPath(); ctx.arc(sx, sy, 4, 0, 2 * Math.PI); ctx.stroke()
+                }
+                ctx.globalAlpha = 1
             }
         }
 
-        DankIcon {
-            anchors.centerIn: parent
-            name: root.getPrayerIcon(root.spanSymbol)
-            fill: root.getPrayerFill(root.spanSymbol)
-            size: ring.diameter - 5
-            color: ring.arcColor
+        // Horizon crossings carry their own labels, which is all the scale the
+        // arc needs to be read.
+        StyledText {
+            x: sky.padX + (root.todayTimes ? root.todayTimes.sunrise / 24 : 0) * (sky.width - 2 * sky.padX) - width / 2
+            y: sky.height * sky.horizonFrac + 3
+            text: root.todayTimes ? root.formatTime(root.hhmm(root.todayTimes.sunrise)) : ""
+            font.pixelSize: Theme.fontSizeSmall - 2
+            color: Theme.surfaceVariantText
+        }
+
+        StyledText {
+            x: sky.padX + (root.todayTimes ? root.todayTimes.maghrib / 24 : 0) * (sky.width - 2 * sky.padX) - width / 2
+            y: sky.height * sky.horizonFrac + 3
+            text: root.todayTimes ? root.formatTime(root.hhmm(root.todayTimes.maghrib)) : ""
+            font.pixelSize: Theme.fontSizeSmall - 2
+            color: Theme.surfaceVariantText
         }
     }
+
 
     // The pill carries only the symbol of the prayer being counted down to and
     // the time left. The prayer's name is legible from the symbol, and its clock
     // time is one click away in the popout -- both were spending bar width to
     // say what the countdown already says.
+    // A ring around a square glyph never sat right -- circular geometry wrapped
+    // around a symbol that is not circular. Progress reads better as a rule
+    // beneath the whole pill: it belongs to the pill rather than fighting the
+    // icon, and it is legible at two pixels where an arc was not.
     horizontalBarPill: Component {
-        Row {
-            spacing: root.iconOnly ? 0 : Theme.spacingXS
-            rightPadding: root.iconOnly ? 0 : Theme.spacingS
+        Column {
+            spacing: 2
 
-            PrayerRing {
-                visible: root.pillStyle === "arc"
-                width: visible ? implicitWidth : 0
-                anchors.verticalCenter: parent.verticalCenter
+            Row {
+                id: pillRow
+                spacing: root.iconOnly ? 0 : Theme.spacingXS
+                anchors.horizontalCenter: parent.horizontalCenter
+
+                DankIcon {
+                    name: root.getPrayerIcon(root.spanSymbol)
+                    fill: root.getPrayerFill(root.spanSymbol)
+                    size: Theme.iconSize - 6
+                    color: root.isUrgent ? Theme.error : Theme.surfaceText
+                    anchors.verticalCenter: parent.verticalCenter
+
+                    Behavior on color { ColorAnimation { duration: 400 } }
+                }
+
+                StyledText {
+                    visible: !root.iconOnly
+                    width: visible ? implicitWidth : 0
+                    text: root.schedule.length > 0 ? root.formatSplit(root.spanRemainingSec) : "\u2026"
+                    font.pixelSize: Theme.fontSizeSmall
+                    font.weight: root.isUrgent ? Font.Bold : Font.Normal
+                    color: root.isUrgent ? Theme.error : Theme.surfaceText
+                    anchors.verticalCenter: parent.verticalCenter
+
+                    Behavior on color { ColorAnimation { duration: 400 } }
+                }
             }
 
-            DankIcon {
-                visible: root.pillStyle !== "arc"
-                width: visible ? implicitWidth : 0
-                name: root.getPrayerIcon(root.spanSymbol)
-                fill: root.getPrayerFill(root.spanSymbol)
-                size: Theme.iconSize - 6
-                color: root.isUrgent ? root.accentColor : Theme.surfaceText
-                anchors.verticalCenter: parent.verticalCenter
+            Rectangle {
+                visible: root.showPillProgress && root.schedule.length > 0
+                width: pillRow.width
+                height: 2
+                radius: 1
+                anchors.horizontalCenter: parent.horizontalCenter
+                color: Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.15)
 
-                Behavior on color { ColorAnimation { duration: 400 } }
-            }
+                Rectangle {
+                    height: parent.height
+                    radius: parent.radius
+                    width: Math.min(1, root.spanProgress) * parent.width
+                    color: root.isUrgent ? Theme.error : root.accentColor
 
-            StyledText {
-                visible: !root.iconOnly
-                width: visible ? implicitWidth : 0
-                text: root.schedule.length > 0
-                      ? root.formatCountdown(root.spanRemainingSec)
-                      : "\u2026"
-                font.pixelSize: Theme.fontSizeSmall
-                font.weight: root.isUrgent ? Font.Bold : Font.Normal
-                color: root.isUrgent ? root.accentColor : Theme.surfaceText
-                anchors.verticalCenter: parent.verticalCenter
-
-                Behavior on color { ColorAnimation { duration: 400 } }
+                    Behavior on width { NumberAnimation { duration: 500; easing.type: Easing.OutCubic } }
+                }
             }
         }
     }
 
-    // Vertical bar pill:
     verticalBarPill: Component {
         Column {
             spacing: 2
 
-            PrayerRing {
-                visible: root.pillStyle === "arc"
-                height: visible ? implicitHeight : 0
-                anchors.horizontalCenter: parent.horizontalCenter
-            }
-
             DankIcon {
-                visible: root.pillStyle !== "arc"
-                height: visible ? implicitHeight : 0
                 name: root.getPrayerIcon(root.spanSymbol)
                 fill: root.getPrayerFill(root.spanSymbol)
                 size: Theme.iconSize - 6
-                color: root.isUrgent ? root.accentColor : Theme.surfaceText
+                color: root.isUrgent ? Theme.error : Theme.surfaceText
                 anchors.horizontalCenter: parent.horizontalCenter
 
                 Behavior on color { ColorAnimation { duration: 400 } }
@@ -492,10 +625,9 @@ PluginComponent {
 
             StyledText {
                 visible: root.schedule.length > 0
-                height: visible ? implicitHeight : 0
-                text: root.formatCountdown(root.spanRemainingSec)
+                text: root.formatSplit(root.spanRemainingSec)
                 font.pixelSize: Theme.fontSizeSmall - 2
-                color: root.isUrgent ? root.accentColor : Theme.surfaceText
+                color: root.isUrgent ? Theme.error : Theme.surfaceText
                 anchors.horizontalCenter: parent.horizontalCenter
             }
         }
@@ -628,69 +760,35 @@ PluginComponent {
                             }
                         }
 
-                        // The deadline.
-                        StyledText {
-                            anchors.horizontalCenter: parent.horizontalCenter
-                            text: root.activeSpan ? root.formatCountdown(root.spanRemainingSec) : "—"
-                            font.pixelSize: Theme.fontSizeLarge + 6
-                            font.weight: Font.Bold
-                            color: root.isUrgent ? Theme.error : Theme.surfaceText
+                        Item { width: 1; height: 4 }
 
-                            Behavior on color { ColorAnimation { duration: 400 } }
-                        }
-
-                        StyledText {
-                            anchors.horizontalCenter: parent.horizontalCenter
-                            text: stateCol.inGap ? "until Dhuhr opens" : "left to pray"
-                            font.pixelSize: Theme.fontSizeSmall
-                            color: Theme.surfaceVariantText
+                        SunPath {
+                            width: parent.width
+                            height: 84
                         }
 
                         Item { width: 1; height: 2 }
 
-                        // The span drawn end to end, with its bounds named.
-                        Item {
-                            width: parent.width
-                            height: 14
+                        // The deadline.
+                        Row {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            spacing: Theme.spacingXS
 
                             StyledText {
-                                id: spanFrom
-                                anchors.left: parent.left
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: stateCol.span ? root.formatTime(root.hhmm(stateCol.span.start)) : ""
-                                font.pixelSize: Theme.fontSizeSmall - 1
-                                color: Theme.surfaceVariantText
+                                text: root.activeSpan ? root.formatSplit(root.spanRemainingSec) : "—"
+                                font.pixelSize: Theme.fontSizeLarge + 4
+                                font.weight: Font.Bold
+                                color: root.isUrgent ? Theme.error : Theme.surfaceText
+                                anchors.baseline: parent.baseline
+
+                                Behavior on color { ColorAnimation { duration: 400 } }
                             }
 
                             StyledText {
-                                id: spanTo
-                                anchors.right: parent.right
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: stateCol.span ? root.formatTime(root.hhmm(stateCol.span.end)) : ""
-                                font.pixelSize: Theme.fontSizeSmall - 1
+                                text: stateCol.inGap ? "until Dhuhr" : "left to pray"
+                                font.pixelSize: Theme.fontSizeSmall
                                 color: Theme.surfaceVariantText
-                            }
-
-                            Rectangle {
-                                anchors.left: spanFrom.right
-                                anchors.right: spanTo.left
-                                anchors.leftMargin: Theme.spacingS
-                                anchors.rightMargin: Theme.spacingS
-                                anchors.verticalCenter: parent.verticalCenter
-                                height: 4
-                                radius: 2
-                                color: Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g,
-                                               Theme.surfaceText.b, 0.12)
-
-                                Rectangle {
-                                    height: parent.height
-                                    radius: parent.radius
-                                    width: Math.min(1, root.spanProgress) * parent.width
-                                    color: root.isUrgent ? Theme.error : root.accentColor
-
-                                    Behavior on width { NumberAnimation { duration: 500; easing.type: Easing.OutCubic } }
-                                    Behavior on color { ColorAnimation { duration: 400 } }
-                                }
+                                anchors.baseline: parent.baseline
                             }
                         }
 
@@ -723,51 +821,6 @@ PluginComponent {
                             color: root.preferredRemainingSec < 0 ? Theme.warning : Theme.surfaceVariantText
                             wrapMode: Text.WordWrap
                         }
-                    }
-                }
-
-                // --- The day at a glance ---
-                // Bands are proportional to real duration, so the long Isha
-                // night and the short Maghrib window are immediately legible,
-                // and the morning gap shows up as bare track.
-                Item {
-                    width: content.width
-                    height: 16
-                    visible: root.dayBands.length > 0
-
-                    Rectangle {
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.verticalCenter: parent.verticalCenter
-                        height: 10
-                        radius: 5
-                        color: Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.08)
-                    }
-
-                    Repeater {
-                        model: root.dayBands
-
-                        delegate: Rectangle {
-                            required property var modelData
-                            readonly property bool isCurrent: root.currentWindow !== null
-                                                              && root.currentWindow.name === modelData.name
-                            x: (modelData.start - root.dayStart) / root.daySpan * parent.width
-                            // A hairline short of the true width, so adjacent
-                            // bands read as separate spans rather than one smear.
-                            width: Math.max(2, (modelData.end - modelData.start) / root.daySpan * parent.width - 1.5)
-                            height: 10
-                            radius: 5
-                            anchors.verticalCenter: parent.verticalCenter
-                            color: isCurrent ? root.accentColor : root.daypartColor(modelData.name)
-                        }
-                    }
-
-                    Rectangle {
-                        x: root.dayProgress * parent.width - width / 2
-                        width: 2
-                        height: parent.height
-                        radius: 1
-                        color: Theme.surfaceText
                     }
                 }
 
@@ -830,10 +883,9 @@ PluginComponent {
                                  : (parent.isCurr ? root.subtleBg : "transparent")
                         }
 
-                        // Seven glyphs down the edge was decoration once the
-                        // strip above carried the picture. A dot in the prayer's
-                        // own daypart colour does the same anchoring work and
-                        // matches it to its band.
+                        // The dot carries the sky colour of the moment the
+                        // prayer is defined by, so it matches the point on the
+                        // arc above without needing a legend between them.
                         Rectangle {
                             id: rowDot
                             anchors.left: parent.left
@@ -842,8 +894,31 @@ PluginComponent {
                             width: modelData.marker ? 4 : 7
                             height: width
                             radius: width / 2
-                            color: parent.isNext ? root.accentColor
-                                                 : root.daypartColor(modelData.label)
+                            color: root.prayerColor(modelData.label)
+                        }
+
+                        // How long the window runs, against the longest of the
+                        // day. Isha's stretch and Maghrib's brevity are the sort
+                        // of thing two columns of digits will never convey.
+                        Rectangle {
+                            visible: !modelData.marker && modelData.end !== null
+                            anchors.left: parent.left
+                            anchors.leftMargin: 92
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 46
+                            height: 3
+                            radius: 1.5
+                            color: Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g,
+                                           Theme.surfaceText.b, 0.10)
+
+                            Rectangle {
+                                height: parent.height
+                                radius: parent.radius
+                                width: Math.max(2, parent.width
+                                       * root.windowLength(modelData.label) / root.longestWindow)
+                                color: root.prayerColor(modelData.label)
+                                opacity: 0.85
+                            }
                         }
 
                         // Markers are not prayers -- they bound them. Indented,

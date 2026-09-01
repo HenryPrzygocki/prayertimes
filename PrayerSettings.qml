@@ -147,15 +147,11 @@ PluginSettings {
                 color: Theme.surfaceText
             }
 
-            SelectionSetting {
-                settingKey: "pillStyle"
-                label: "Bar Style"
-                description: "Spell the remaining time out, or ring it with how much of the current window is spent."
-                options: [
-                    { label: "Countdown text", value: "countdown" },
-                    { label: "Progress ring",  value: "arc" }
-                ]
-                defaultValue: "countdown"
+            ToggleSetting {
+                settingKey: "showPillProgress"
+                label: "Progress Rule"
+                description: "Draw a thin rule beneath the bar widget showing how much of the current window has passed"
+                defaultValue: true
             }
 
             ToggleSetting {

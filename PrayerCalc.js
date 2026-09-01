@@ -211,6 +211,28 @@ function adjustHighLatitudes(times, m, lat, mode) {
         times.isha = times.sunset + portion(m.isha)
 }
 
+// === Sun position through the day ===
+// The prayer times are all instants where the sun crosses a given altitude, so
+// the altitude curve itself is the thing they are cut from. Exposing it lets the
+// interface draw the actual arc the sun walks rather than a stylised one.
+//
+// `hourLocal` is local civil time. Returns degrees above the horizon, negative
+// when the sun is down.
+function solarAltitude(year, month, day, hourLocal, opts) {
+    var lat = opts.lat
+    var lon = opts.lon
+    var jd = julianDay(year, month, day) - lon / (15 * 24)
+    var sp = sunPosition(jd + hourLocal / 24)
+
+    // Undo the same shift computeDay applies to get from the local meridian's
+    // mean solar frame to civil time, then take the hour angle from solar noon.
+    var meanSolar = hourLocal - opts.tzOffset + lon / 15
+    var H = 15 * (meanSolar - (12 - sp.eqt))
+
+    return dasin(dsin(lat) * dsin(sp.decl)
+               + dcos(lat) * dcos(sp.decl) * dcos(H))
+}
+
 // === Hijri calendar ===
 // Tabular (arithmetical) Islamic calendar, the same civil reckoning Aladhan
 // serves by default. It is a fixed 30-year cycle of 11 leap years, so it can
