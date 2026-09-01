@@ -150,19 +150,21 @@ PluginComponent {
         return a === undefined ? Theme.surfaceVariantText : skyColor(a)
     }
 
-    // The four events that happen near the horizon, which are the ones that
-    // give the arc its scale. Dhuhr and Asr ride high on the curve where labels
-    // would collide, and the list states them exactly.
-    readonly property var horizonMarks: {
+    // Every event plotted on the curve. Each is by definition the instant the
+    // sun reaches a given altitude, so the altitude is what places it -- the
+    // point sits on the path rather than beside it.
+    readonly property var arcMarks: {
         var t = root.todayTimes
         if (!t) return []
         var out = []
-        var keys = [["Fajr", "fajr"], ["sunrise", "sunrise"],
-                    ["Maghrib", "maghrib"], ["Isha", "isha"]]
+        var keys = [["Fajr", "fajr"], ["Sunrise", "sunrise"], ["Dhuhr", "dhuhr"],
+                    ["Asr", "asr"], ["Maghrib", "maghrib"], ["Isha", "isha"],
+                    ["Islamic midnight", "midnight"]]
         for (var i = 0; i < keys.length; i++) {
             var h = t[keys[i][1]]
-            if (h === undefined || isNaN(h)) continue
-            out.push({ name: keys[i][0], h: h % 24 })
+            var a = root.prayerAlt[keys[i][0]]
+            if (h === undefined || isNaN(h) || a === undefined) continue
+            out.push({ name: keys[i][0], h: h % 24, alt: a })
         }
         return out
     }
@@ -403,16 +405,19 @@ PluginComponent {
 
     // Horizontal bar pill:
     // The arc the sun walks today, sampled from the same ephemeris the prayer
-    // times are cut from. It answers one question and only one -- where the sun
-    // is -- so it carries no progress encoding of its own; the span bar above
-    // owns that. Its scale comes from the four horizon-adjacent events labelled
-    // along the baseline, which is what makes it readable without a legend.
+    // times are cut from. It answers one question -- where the sun is -- so it
+    // carries no progress encoding; the span bar above owns that.
+    //
+    // Only the two horizon crossings are labelled. Everything else is a dot on
+    // the curve in its own sky colour, matching its dot in the list below. Six
+    // labels cannot coexist on a 24-hour axis where Fajr and sunrise are seventy
+    // minutes apart -- fourteen pixels -- and the label is forty-six wide.
     component SunPath: Item {
         id: sky
 
-        readonly property int padX: 14
-        readonly property real horizonY: 44
-        readonly property real nightDepth: 15
+        readonly property int padX: 10
+        readonly property real horizonY: 58
+        readonly property real nightDepth: 28
 
         function repaint() { skyCanvas.requestPaint() }
 
@@ -432,10 +437,7 @@ PluginComponent {
 
         Canvas {
             id: skyCanvas
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.top: parent.top
-            height: sky.horizonY + sky.nightDepth + 2
+            anchors.fill: parent
             onAvailableChanged: if (available) requestPaint()
 
             onPaint: {
@@ -456,27 +458,39 @@ PluginComponent {
                 var hz = sky.horizonY
                 function py(alt) {
                     return alt >= 0
-                         ? hz - (alt / maxAlt) * (hz - 7)
+                         ? hz - (alt / maxAlt) * (hz - 8)
                          : hz + (alt / minAlt) * sky.nightDepth
                 }
 
-                // Ground, so night reads as night.
-                ctx.fillStyle = Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g,
-                                        Theme.surfaceText.b, 0.04)
-                ctx.fillRect(0, hz, width, height - hz)
+                // Daylight, filled under the curve. The single strongest cue for
+                // reading the shape at a glance: the lit part of the day has
+                // substance, the night is bare.
+                var grad = ctx.createLinearGradient(0, 8, 0, hz)
+                grad.addColorStop(0, Qt.rgba(0.91, 0.70, 0.24, 0.22))
+                grad.addColorStop(1, Qt.rgba(0.91, 0.70, 0.24, 0.02))
+                ctx.fillStyle = grad
+                ctx.beginPath()
+                ctx.moveTo(sky.xFor(0), hz)
+                for (var f = 0; f < samples.length; f++) {
+                    var yf = py(samples[f].alt)
+                    ctx.lineTo(sky.xFor(samples[f].h), Math.min(yf, hz))
+                }
+                ctx.lineTo(sky.xFor(24), hz)
+                ctx.closePath()
+                ctx.fill()
 
                 ctx.strokeStyle = Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g,
-                                          Theme.surfaceText.b, 0.18)
+                                          Theme.surfaceText.b, 0.20)
                 ctx.lineWidth = 1
                 ctx.beginPath()
                 ctx.moveTo(0, hz + 0.5)
                 ctx.lineTo(width, hz + 0.5)
                 ctx.stroke()
 
-                // One even path. No elapsed split -- that is the span bar's job.
+                // The path itself.
                 ctx.strokeStyle = Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g,
-                                          Theme.surfaceText.b, 0.28)
-                ctx.lineWidth = 2
+                                          Theme.surfaceText.b, 0.34)
+                ctx.lineWidth = 1.6
                 ctx.lineJoin = "round"
                 ctx.beginPath()
                 for (var j = 0; j < samples.length; j++) {
@@ -486,65 +500,60 @@ PluginComponent {
                 }
                 ctx.stroke()
 
-                // Where the sun is: a filled disc by day, a hollow ring by night.
+                // Every prayer as a point on the path, ringed in the panel's own
+                // background so it reads clearly against the curve behind it.
+                var marks = root.arcMarks
+                for (var k = 0; k < marks.length; k++) {
+                    var mk = marks[k]
+                    var cx = sky.xFor(mk.h), cy = py(mk.alt)
+                    ctx.beginPath()
+                    ctx.arc(cx, cy, 4.2, 0, 2 * Math.PI)
+                    ctx.fillStyle = Theme.surfaceContainerHigh
+                    ctx.fill()
+                    ctx.beginPath()
+                    ctx.arc(cx, cy, 2.8, 0, 2 * Math.PI)
+                    ctx.fillStyle = root.skyColor(mk.alt)
+                    ctx.fill()
+                }
+
+                // Where the sun is now.
                 var nowAlt = root.altitudeNow
                 var sx = sky.xFor(root.nowHours()), sy = py(nowAlt)
                 var c = root.skyColor(nowAlt)
                 ctx.fillStyle = c
                 ctx.strokeStyle = c
-                ctx.globalAlpha = 0.22
-                ctx.beginPath(); ctx.arc(sx, sy, 10, 0, 2 * Math.PI); ctx.fill()
+                ctx.globalAlpha = 0.25
+                ctx.beginPath(); ctx.arc(sx, sy, 11, 0, 2 * Math.PI); ctx.fill()
                 ctx.globalAlpha = 1
                 if (nowAlt >= 0) {
-                    ctx.beginPath(); ctx.arc(sx, sy, 5, 0, 2 * Math.PI); ctx.fill()
+                    ctx.beginPath(); ctx.arc(sx, sy, 5.5, 0, 2 * Math.PI); ctx.fill()
                 } else {
-                    ctx.lineWidth = 1.5
-                    ctx.beginPath(); ctx.arc(sx, sy, 4, 0, 2 * Math.PI); ctx.stroke()
+                    ctx.lineWidth = 1.8
+                    ctx.beginPath(); ctx.arc(sx, sy, 4.5, 0, 2 * Math.PI); ctx.stroke()
                 }
             }
         }
 
-        // The horizon-adjacent events, labelled where they cross. Dhuhr and Asr
-        // are deliberately absent: they sit high on the curve where labels would
-        // collide, and the list below states them exactly.
-        Repeater {
-            model: root.horizonMarks
-
-            delegate: Item {
-                required property var modelData
-                width: 46
-                height: 30
-                x: Math.max(0, Math.min(sky.width - width, sky.xFor(modelData.h) - width / 2))
-                y: sky.horizonY + sky.nightDepth + 6
-
-                Rectangle {
-                    width: 1
-                    height: 4
-                    radius: 0.5
-                    y: -(sky.nightDepth + 6)
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    color: Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g,
-                                   Theme.surfaceText.b, 0.30)
-                }
-
-                StyledText {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    text: modelData.name
-                    font.pixelSize: Theme.fontSizeSmall - 2
-                    color: Theme.surfaceVariantText
-                    opacity: 0.75
-                }
-
-                StyledText {
-                    y: 12
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    text: root.formatTime(root.hhmm(modelData.h))
-                    font.pixelSize: Theme.fontSizeSmall - 1
-                    color: Theme.surfaceText
-                    opacity: 0.85
-                }
-            }
+        // The two horizon crossings, set inside the arc where nothing else is,
+        // and thirteen hours apart so they cannot collide with each other.
+        StyledText {
+            x: Math.min(sky.width - width, sky.xFor(root.todayTimes ? root.todayTimes.sunrise : 6) + 6)
+            y: sky.horizonY - 15
+            text: root.todayTimes ? root.formatTime(root.hhmm(root.todayTimes.sunrise)) : ""
+            font.pixelSize: Theme.fontSizeSmall - 1
+            color: Theme.surfaceVariantText
+            visible: root.todayTimes !== null
         }
+
+        StyledText {
+            x: Math.max(0, sky.xFor(root.todayTimes ? root.todayTimes.maghrib : 18) - width - 6)
+            y: sky.horizonY - 15
+            text: root.todayTimes ? root.formatTime(root.hhmm(root.todayTimes.maghrib)) : ""
+            font.pixelSize: Theme.fontSizeSmall - 1
+            color: Theme.surfaceVariantText
+            visible: root.todayTimes !== null
+        }
+
     }
 
     // A ring around a square glyph never sat right -- circular geometry wrapped
@@ -857,7 +866,7 @@ PluginComponent {
                 // --- Where the sun is ---
                 SunPath {
                     width: content.width
-                    height: 100
+                    height: 92
                     visible: root.sunSamples.length > 0
                 }
 
