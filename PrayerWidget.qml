@@ -317,11 +317,15 @@ PluginComponent {
     }
 
     // === Prayer icons ===
+    // With the prayer's name gone from the bar, the symbol is the only thing
+    // identifying it, so all seven are visually distinct. Asr gets the shade
+    // glyph because it is the one prayer defined by shadow length rather than
+    // by the sun's altitude.
     property var prayerIcons: ({
-        "Fajr":     "bedtime",
-        "Sunrise":  "wb_twilight",
+        "Fajr":     "moon_stars",
+        "Sunrise":  "clear_day",
         "Dhuhr":    "wb_sunny",
-        "Asr":      "light_mode",
+        "Asr":      "wb_shade",
         "Maghrib":  "wb_twilight",
         "Isha":     "bedtime",
         "Midnight": "dark_mode"
@@ -332,48 +336,35 @@ PluginComponent {
     }
 
     // Horizontal bar pill:
+    // The pill carries only the symbol of the prayer being counted down to and
+    // the time left. The prayer's name is legible from the symbol, and its clock
+    // time is one click away in the popout -- both were spending bar width to
+    // say what the countdown already says.
     horizontalBarPill: Component {
         Row {
             spacing: root.iconOnly ? 0 : Theme.spacingXS
             rightPadding: root.iconOnly ? 0 : Theme.spacingS
 
             DankIcon {
-                name: root.getPrayerIcon(root.currName)
+                name: root.getPrayerIcon(root.nextName)
                 size: Theme.iconSize - 6
-                color: Theme.surfaceText
+                color: root.isUrgent ? root.accentColor : Theme.surfaceText
                 anchors.verticalCenter: parent.verticalCenter
+
+                Behavior on color { ColorAnimation { duration: 400 } }
             }
 
             StyledText {
                 visible: !root.iconOnly
                 text: root.schedule.length > 0
-                      ? (root.nextName + " " + root.formatTime(root.hhmm(root.nextAt)))
-                      : "Loading…"
-                font.pixelSize: Theme.fontSizeSmall
-                color: Theme.surfaceText
-                anchors.verticalCenter: parent.verticalCenter
-                width: root.iconOnly ? 0 : implicitWidth
-            }
-
-            StyledText {
-                visible: !root.iconOnly && root.schedule.length > 0
-                text: "·"
-                font.pixelSize: Theme.fontSizeSmall
-                color: Theme.surfaceVariantText
-                leftPadding: 2
-                rightPadding: 2
-                anchors.verticalCenter: parent.verticalCenter
-                width: (!root.iconOnly && root.schedule.length > 0) ? implicitWidth : 0
-            }
-
-            StyledText {
-                visible: !root.iconOnly && root.schedule.length > 0
-                text: root.formatCountdown(root.nextTotalSeconds)
+                      ? root.formatCountdown(root.nextTotalSeconds)
+                      : "…"
                 font.pixelSize: Theme.fontSizeSmall
                 font.weight: root.isUrgent ? Font.Bold : Font.Normal
                 color: root.isUrgent ? root.accentColor : Theme.surfaceText
                 anchors.verticalCenter: parent.verticalCenter
-                width: (!root.iconOnly && root.schedule.length > 0) ? implicitWidth : 0
+
+                Behavior on color { ColorAnimation { duration: 400 } }
             }
         }
     }
@@ -384,10 +375,12 @@ PluginComponent {
             spacing: 2
 
             DankIcon {
-                name: root.getPrayerIcon(root.currName)
+                name: root.getPrayerIcon(root.nextName)
                 size: Theme.iconSize - 6
-                color: Theme.surfaceText
+                color: root.isUrgent ? root.accentColor : Theme.surfaceText
                 anchors.horizontalCenter: parent.horizontalCenter
+
+                Behavior on color { ColorAnimation { duration: 400 } }
             }
 
             StyledText {
