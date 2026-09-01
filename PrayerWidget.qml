@@ -40,6 +40,7 @@ PluginComponent {
     // Times are fractional hours in local civil time. Tomorrow is needed because
     // after Isha the next prayer is tomorrow's Fajr, and Isha's window runs until
     // tomorrow's dawn.
+    property var yesterdayTimes: null
     property var todayTimes: null
     property var tomorrowTimes: null
     property string hijriText: ""
@@ -88,10 +89,13 @@ PluginComponent {
         }
         var now = new Date()
         var noon = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12)
-        var noonTomorrow = new Date(noon.getTime() + 86400000)
 
+        // Yesterday is needed because the small hours before dawn still belong
+        // to yesterday's Isha window; tomorrow, because that window ends at
+        // tomorrow's dawn.
+        root.yesterdayTimes = computeFor(new Date(noon.getTime() - 86400000))
         root.todayTimes = computeFor(noon)
-        root.tomorrowTimes = computeFor(noonTomorrow)
+        root.tomorrowTimes = computeFor(new Date(noon.getTime() + 86400000))
         root.hijriText = Calc.formatHijri(
             Calc.hijriDate(now.getFullYear(), now.getMonth() + 1, now.getDate(), root.hijriOffset))
         root.lastComputed = Qt.formatDate(now, "yyyy-MM-dd")
@@ -111,6 +115,64 @@ PluginComponent {
             { name: "Isha",    at: todayTimes.isha },
             { name: "Fajr",    at: tomorrowTimes.fajr + 24 }
         ]
+    }
+
+    // === Prayer windows ===
+    // How long each prayer may be prayed for. Every window closes when the next
+    // prayer opens, with two exceptions: Fajr closes at sunrise rather than
+    // running on to Dhuhr, and Isha runs to the following dawn -- though the
+    // majority hold that it should not be delayed past Islamic midnight, which
+    // is tracked separately as a preferred limit rather than a hard one.
+    //
+    // Hours may fall outside [0,24) so that a window spanning midnight stays a
+    // single contiguous interval.
+    readonly property var windows: {
+        if (!yesterdayTimes || !todayTimes || !tomorrowTimes) return []
+        var y = yesterdayTimes, t = todayTimes, m = tomorrowTimes
+
+        // Islamic midnight lands in the small hours, so place it on whichever
+        // side of 00:00 keeps it inside its own night.
+        function nightMidnight(times, base) {
+            return times.midnight < 12 ? times.midnight + base : times.midnight + base - 24
+        }
+
+        return [
+            { name: "Isha",    start: y.isha - 24, end: t.fajr,       endLabel: "dawn",
+              preferredEnd: nightMidnight(y, 0),   preferredLabel: "Islamic midnight" },
+            { name: "Fajr",    start: t.fajr,      end: t.sunrise,    endLabel: "sunrise" },
+            { name: "Dhuhr",   start: t.dhuhr,     end: t.asr,        endLabel: "Asr" },
+            { name: "Asr",     start: t.asr,       end: t.maghrib,    endLabel: "Maghrib" },
+            { name: "Maghrib", start: t.maghrib,   end: t.isha,       endLabel: "Isha" },
+            { name: "Isha",    start: t.isha,      end: m.fajr + 24,  endLabel: "dawn",
+              preferredEnd: nightMidnight(t, 24),  preferredLabel: "Islamic midnight" }
+        ]
+    }
+
+    // The window we are inside right now, or null between sunrise and Dhuhr,
+    // when no prayer is due.
+    readonly property var currentWindow: {
+        var h = nowHours()
+        var w = root.windows
+        for (var i = 0; i < w.length; i++)
+            if (h >= w[i].start && h < w[i].end) return w[i]
+        return null
+    }
+
+    readonly property int windowElapsedSec: {
+        var w = currentWindow
+        return w ? Math.max(0, Math.round((nowHours() - w.start) * 3600)) : 0
+    }
+
+    readonly property int windowRemainingSec: {
+        var w = currentWindow
+        return w ? Math.max(0, Math.round((w.end - nowHours()) * 3600)) : 0
+    }
+
+    // Seconds until Isha's preferred cut-off, negative once it has passed.
+    readonly property int preferredRemainingSec: {
+        var w = currentWindow
+        if (!w || w.preferredEnd === undefined) return 0
+        return Math.round((w.preferredEnd - nowHours()) * 3600)
     }
 
     function nowHours() {
