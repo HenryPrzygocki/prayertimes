@@ -1,0 +1,149 @@
+[
+ {
+  "name": "Auburn, AL (US)",
+  "lat": 32.60412738496237,
+  "lon": -85.48174314632878,
+  "tz": "America/Chicago",
+  "method": 2
+ },
+ {
+  "name": "Mecca (SA)",
+  "lat": 21.4225,
+  "lon": 39.8262,
+  "tz": "Asia/Riyadh",
+  "method": 4
+ },
+ {
+  "name": "Islamabad (PK)",
+  "lat": 33.6844,
+  "lon": 73.0479,
+  "tz": "Asia/Karachi",
+  "method": 1
+ },
+ {
+  "name": "Jakarta (ID)",
+  "lat": -6.2088,
+  "lon": 106.8456,
+  "tz": "Asia/Jakarta",
+  "method": 20
+ },
+ {
+  "name": "Cairo (EG)",
+  "lat": 30.0444,
+  "lon": 31.2357,
+  "tz": "Africa/Cairo",
+  "method": 5
+ },
+ {
+  "name": "Riyadh (SA)",
+  "lat": 24.7136,
+  "lon": 46.6753,
+  "tz": "Asia/Riyadh",
+  "method": 8
+ },
+ {
+  "name": "Singapore (SG)",
+  "lat": 1.3521,
+  "lon": 103.8198,
+  "tz": "Asia/Singapore",
+  "method": 11
+ },
+ {
+  "name": "Casablanca (MA)",
+  "lat": 33.5731,
+  "lon": -7.5898,
+  "tz": "Africa/Casablanca",
+  "method": 21
+ },
+ {
+  "name": "Kuwait City (KW)",
+  "lat": 29.3759,
+  "lon": 47.9774,
+  "tz": "Asia/Kuwait",
+  "method": 9
+ },
+ {
+  "name": "Tunis (TN)",
+  "lat": 36.8065,
+  "lon": 10.1815,
+  "tz": "Africa/Tunis",
+  "method": 18
+ },
+ {
+  "name": "Algiers (DZ)",
+  "lat": 36.7538,
+  "lon": 3.0588,
+  "tz": "Africa/Algiers",
+  "method": 19
+ },
+ {
+  "name": "Paris (FR)",
+  "lat": 48.8566,
+  "lon": 2.3522,
+  "tz": "Europe/Paris",
+  "method": 12
+ },
+ {
+  "name": "Dubai (AE)",
+  "lat": 25.2048,
+  "lon": 55.2708,
+  "tz": "Asia/Dubai",
+  "method": 16
+ },
+ {
+  "name": "Doha (QA)",
+  "lat": 25.2854,
+  "lon": 51.531,
+  "tz": "Asia/Qatar",
+  "method": 10
+ },
+ {
+  "name": "Moscow (RU)",
+  "lat": 55.7558,
+  "lon": 37.6173,
+  "tz": "Europe/Moscow",
+  "method": 14
+ },
+ {
+  "name": "London (GB)",
+  "lat": 51.5074,
+  "lon": -0.1278,
+  "tz": "Europe/London",
+  "method": 3
+ },
+ {
+  "name": "Kuala Lumpur (MY)",
+  "lat": 3.139,
+  "lon": 101.6869,
+  "tz": "Asia/Kuala_Lumpur",
+  "method": 17
+ },
+ {
+  "name": "Sydney (AU)",
+  "lat": -33.8688,
+  "lon": 151.2093,
+  "tz": "Australia/Sydney",
+  "method": 3
+ },
+ {
+  "name": "Tromso (NO) 69N",
+  "lat": 69.6492,
+  "lon": 18.9553,
+  "tz": "Europe/Oslo",
+  "method": 3
+ },
+ {
+  "name": "Qum (IR) jafari",
+  "lat": 34.6416,
+  "lon": 50.8746,
+  "tz": "Asia/Tehran",
+  "method": 7
+ },
+ {
+  "name": "Amman (JO)",
+  "lat": 31.9454,
+  "lon": 35.9284,
+  "tz": "Asia/Amman",
+  "method": 23
+ }
+]
