@@ -17,7 +17,7 @@ PluginSettings {
 
     StyledText {
         width: parent.width
-        text: "Configure location, calculation method, and display preferences"
+        text: "Prayer times are computed on this machine from your coordinates. Nothing is fetched over the network."
         font.pixelSize: Theme.fontSizeSmall
         color: Theme.surfaceVariantText
         wrapMode: Text.WordWrap
@@ -291,7 +291,7 @@ PluginSettings {
             }
 
             StyledText {
-                text: "Displays Islamic prayer times using the Aladhan API with live countdown to the next prayer.\n\n• Fajr, Dhuhr, Asr, Maghrib, Isha — plus Imsak & Sunrise\n• Hijri & Gregorian date display\n• Desktop notifications 15 minutes before prayer and at prayer time\n• Configurable calculation method and Asr juristic school\n\nData provided by aladhan.com"
+                text: "Prayer times are computed locally from the sun's position — no network requests, no rate limits, and your coordinates never leave this machine.\n\n• Each prayer as a window: when it opens, when it closes, how long is left\n• Islamic midnight and the Hijri date\n• 22 calculation methods, both Asr schools, high-latitude handling\n\nForked from the Prayer Times plugin by muadz (github.com/muadzmo/prayertimes). The local computation, prayer windows and interface are this fork's own work."
                 font.pixelSize: Theme.fontSizeSmall
                 color: Theme.surfaceVariantText
                 wrapMode: Text.WordWrap

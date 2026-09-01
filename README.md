@@ -1,72 +1,67 @@
 # Prayer Times
 
-A DankMaterialShell widget for displaying Islamic prayer times using the Aladhan API.
-
-## Preview
+A [DankMaterialShell](https://github.com/AvengeMedia/DankMaterialShell) widget showing Islamic
+prayer times, computed locally from the sun's position.
 
 ![Screenshot](screenshot.png)
 
-## Features
+## What it does
 
-- Displays current and next prayer times in the Dank Bar
-- Popout view showing all prayer times (Fajr, Dhuhr, Asr, Maghrib, Isha) and dates (Hijri and Gregorian)
-- Pure QML/JavaScript — no external tools (`curl`, `jq`, `bash`) required
-- API data fetched via `XMLHttpRequest` and cached in-memory per day
-- Configurable refresh interval and location (latitude/longitude)
-- Toast notifications when a prayer time is reached
+- **No network.** Prayer times are a deterministic function of date, latitude and longitude, so
+  they are calculated on this machine. Works offline, cannot be rate limited, and your
+  coordinates are never sent anywhere.
+- **Prayers as windows, not instants.** Each prayer shows when it opens, when it closes, and how
+  much of it is left — including the fact that Fajr closes at sunrise rather than running on to
+  Dhuhr, leaving a stretch of the morning where no prayer is due.
+- **Islamic midnight**, tracked as Isha's preferred cut-off alongside its hard limit at dawn.
+- **Hijri date**, with an adjustment for calendars set by local moonsighting.
+- 22 calculation methods, both Asr schools, angle-based high-latitude handling, and a polar clamp.
 
-## Installation
+## Accuracy
 
-### From Plugin Registry (Recommended)
+The calculation is cross-checked against the [Aladhan API](https://aladhan.com/prayer-times-api)
+by the harness in `test/`: 2016 comparisons across 21 cities, six dates spanning both solstices
+and equinoxes, and both Asr schools. Nineteen of the twenty-one cities agree to within one minute
+on every prayer. `test/README.md` documents the remaining divergences — three of which are the API
+applying undocumented defaults that contradict its own published parameters.
 
 ```bash
-# dms plugins install prayerTimes
-# or install using the plugins tab on DMS settings
+cd test
+node fetchcache.mjs   # snapshot API responses
+node compare.mjs      # compare local computation against them
 ```
-
-### Manual Installation
-
-```bash
-# Copy plugin to DMS plugins directory
-cp -r "prayerTimesPlugin" ~/.config/DankMaterialShell/plugins/
-
-# Enable in DMS plugins tab and add the widget to Dank Bar
-```
-
-## Configuration
-
-- **Refresh Interval**: Set how often to update prayer times (1-60 minutes, default: 5 minutes)
-- **Latitude**: Set your location's latitude (e.g., -6.2000 for Jakarta)
-- **Longitude**: Set your location's longitude (e.g., 106.8166 for Jakarta)
-
-Access settings through the DMS plugins settings panel.
 
 ## Requirements
 
-- DankMaterialShell >= 0.2.4
-- Wayland compositor (Niri, Hyprland, etc.)
+DankMaterialShell ≥ 0.2.4 on Quickshell 0.2+. No external tools.
 
-> **Note:** No external tools required — API calls and JSON processing are handled entirely in QML/JavaScript.
+## Installation
 
-## Compatibility
+```bash
+git clone https://github.com/HenryPrzygocki/prayertimes.git \
+  ~/.config/DankMaterialShell/plugins/prayerTimes
+```
 
-- **Compositors**: Niri and Hyprland
-- **Distros**: Universal - works on any Linux distribution
+Then enable it in *DMS Settings → Plugins* and add the widget to a DankBar section.
 
-## API
+## Configuration
 
-This plugin uses the [Aladhan Prayer Times API](https://aladhan.com/prayer-times-api) for accurate prayer time calculations.
+Set your latitude and longitude, pick the calculation method your local mosque follows, and choose
+the Asr school. Everything else is display preference.
 
-## Contributing
+Note that the calculation method is a *convention*, not a physical constant: methods differ only in
+which angle below the horizon counts as dawn and nightfall. The Asr school is the one setting that
+changes a geometric rule, and switching from Shafi to Hanafi moves Asr itself 45–70 minutes later.
 
-Found a bug? Open an issue or submit a pull request!
+## Credits
 
-## Author
+Forked from [muadzmo/prayertimes](https://github.com/muadzmo/prayertimes) by **muadz**, which
+provided the original widget, its icon, and the plugin's overall shape.
 
-Created by muadz
+This fork replaced the Aladhan HTTP client with a local implementation of the underlying solar
+geometry, added the prayer-window model, and rebuilt the bar pill and popout.
 
-## Links
-
-- [DankMaterialShell](https://github.com/AvengeMedia/DankMaterialShell)
-- [Plugin Registry](https://github.com/AvengeMedia/dms-plugin-registry)
-- [Aladhan API](https://aladhan.com/prayer-times-api)
+> **Licensing:** the upstream repository does not carry a licence file, so no licence terms have
+> been granted for its code. This fork is published on GitHub under the same conditions the
+> original was, and adds no licence of its own, since that would not be ours to grant. If you
+> intend to redistribute this outside GitHub, ask the original author to add a licence first.

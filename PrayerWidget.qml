@@ -176,6 +176,32 @@ PluginComponent {
         return Math.round((w.preferredEnd - nowHours()) * 3600)
     }
 
+    // The day as a strip: each prayer window as a proportional band running from
+    // today's dawn to tomorrow's. The sunrise-to-Dhuhr gap is deliberately left
+    // as bare track, so the one stretch with no prayer due is visible as a hole.
+    readonly property var dayBands: {
+        if (!todayTimes || !tomorrowTimes) return []
+        var t = todayTimes
+        return [
+            { name: "Fajr",    start: t.fajr,    end: t.sunrise },
+            { name: "Dhuhr",   start: t.dhuhr,   end: t.asr },
+            { name: "Asr",     start: t.asr,     end: t.maghrib },
+            { name: "Maghrib", start: t.maghrib, end: t.isha },
+            { name: "Isha",    start: t.isha,    end: tomorrowTimes.fajr + 24 }
+        ]
+    }
+
+    readonly property real dayStart: todayTimes ? todayTimes.fajr : 0
+    readonly property real daySpan: (todayTimes && tomorrowTimes)
+                                  ? (tomorrowTimes.fajr + 24 - todayTimes.fajr) : 24
+
+    // Position of "now" along that strip, clamped for the pre-dawn hours which
+    // belong to the previous cycle.
+    readonly property real dayProgress: {
+        if (!todayTimes) return 0
+        return Math.max(0, Math.min(1, (nowHours() - dayStart) / daySpan))
+    }
+
     // How far through the gap between the last prayer and the next we are, for
     // the ring style of the bar pill.
     readonly property real progressToNext: {
@@ -353,7 +379,7 @@ PluginComponent {
         "Fajr":     "moon_stars",
         "Sunrise":  "clear_day",
         "Dhuhr":    "wb_sunny",
-        "Asr":      "wb_shade",
+        "Asr":      "wb_iridescent",
         "Maghrib":  "wb_twilight",
         "Isha":     "bedtime",
         "Midnight": "dark_mode"
@@ -372,8 +398,11 @@ PluginComponent {
         property real fraction: root.progressToNext
         property color arcColor: root.isUrgent ? root.accentColor : Theme.surfaceText
 
-        implicitWidth: Theme.iconSize + 6
-        implicitHeight: Theme.iconSize + 6
+        // Must sit inside the bar pill's own padding, so it is driven by the
+        // bar's thickness rather than by the icon size.
+        readonly property int diameter: Math.max(16, Math.min(Theme.iconSize + 2, root.widgetThickness - 8))
+        implicitWidth: diameter
+        implicitHeight: diameter
 
         onFractionChanged: arcCanvas.requestPaint()
         onArcColorChanged: arcCanvas.requestPaint()
@@ -406,7 +435,7 @@ PluginComponent {
         DankIcon {
             anchors.centerIn: parent
             name: root.getPrayerIcon(root.nextName)
-            size: Theme.iconSize - 8
+            size: ring.diameter - 5
             color: ring.arcColor
         }
     }
@@ -417,8 +446,8 @@ PluginComponent {
     // say what the countdown already says.
     horizontalBarPill: Component {
         Row {
-            spacing: (root.iconOnly || root.pillStyle === "arc") ? 0 : Theme.spacingXS
-            rightPadding: (root.iconOnly || root.pillStyle === "arc") ? 0 : Theme.spacingS
+            spacing: root.iconOnly ? 0 : Theme.spacingXS
+            rightPadding: root.iconOnly ? 0 : Theme.spacingS
 
             PrayerRing {
                 visible: root.pillStyle === "arc"
@@ -438,7 +467,7 @@ PluginComponent {
             }
 
             StyledText {
-                visible: root.pillStyle !== "arc" && !root.iconOnly
+                visible: !root.iconOnly
                 width: visible ? implicitWidth : 0
                 text: root.schedule.length > 0
                       ? root.formatCountdown(root.nextTotalSeconds)
@@ -476,7 +505,7 @@ PluginComponent {
             }
 
             StyledText {
-                visible: root.pillStyle !== "arc" && root.schedule.length > 0
+                visible: root.schedule.length > 0
                 height: visible ? implicitHeight : 0
                 text: root.formatCountdown(root.nextTotalSeconds)
                 font.pixelSize: Theme.fontSizeSmall - 2
@@ -743,33 +772,100 @@ PluginComponent {
                     }
                 }
 
-                Rectangle {
+                // --- The day at a glance ---
+                // Bands are proportional to real duration, so the long Isha
+                // night and the short Maghrib window are immediately legible,
+                // and the morning gap shows up as bare track.
+                Item {
                     width: content.width
-                    height: 1
-                    color: Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.08)
+                    height: 14
+                    visible: root.dayBands.length > 0
+
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        height: 8
+                        radius: 4
+                        color: Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.08)
+                    }
+
+                    Repeater {
+                        model: root.dayBands
+
+                        delegate: Rectangle {
+                            required property var modelData
+                            readonly property bool isCurrent: root.currentWindow !== null
+                                                              && root.currentWindow.name === modelData.name
+                            x: (modelData.start - root.dayStart) / root.daySpan * parent.width
+                            width: Math.max(2, (modelData.end - modelData.start) / root.daySpan * parent.width)
+                            height: 8
+                            radius: 4
+                            anchors.verticalCenter: parent.verticalCenter
+                            color: isCurrent ? root.accentColor
+                                             : Qt.rgba(root.accentColor.r, root.accentColor.g,
+                                                       root.accentColor.b, 0.30)
+                        }
+                    }
+
+                    Rectangle {
+                        x: root.dayProgress * parent.width - width / 2
+                        width: 2
+                        height: parent.height
+                        radius: 1
+                        color: Theme.surfaceText
+                    }
                 }
 
-                // --- The whole day, with each window's span ---
+                // --- Column header ---
+                Item {
+                    width: content.width
+                    height: openLbl.implicitHeight
+
+                    StyledText {
+                        id: openLbl
+                        anchors.right: parent.right
+                        anchors.rightMargin: 10 + 52 + 18
+                        text: "opens"
+                        font.pixelSize: Theme.fontSizeSmall - 2
+                        color: Theme.surfaceVariantText
+                        opacity: 0.7
+                    }
+
+                    StyledText {
+                        anchors.right: parent.right
+                        anchors.rightMargin: 10
+                        text: "closes"
+                        font.pixelSize: Theme.fontSizeSmall - 2
+                        color: Theme.surfaceVariantText
+                        opacity: 0.7
+                    }
+                }
+
+                // --- The day in full ---
                 Repeater {
                     model: root.todayTimes ? [
-                        { label: "Fajr",     start: root.todayTimes.fajr,    end: root.todayTimes.sunrise },
-                        { label: "Sunrise",  start: root.todayTimes.sunrise, end: null },
-                        { label: "Dhuhr",    start: root.todayTimes.dhuhr,   end: root.todayTimes.asr },
-                        { label: "Asr",      start: root.todayTimes.asr,     end: root.todayTimes.maghrib },
-                        { label: "Maghrib",  start: root.todayTimes.maghrib, end: root.todayTimes.isha },
-                        { label: "Isha",     start: root.todayTimes.isha,    end: root.tomorrowTimes ? root.tomorrowTimes.fajr + 24 : null },
-                        { label: "Midnight", start: root.todayTimes.midnight, end: null }
+                        { label: "Fajr",     start: root.todayTimes.fajr,     end: root.todayTimes.sunrise, marker: false },
+                        { label: "Sunrise",  start: root.todayTimes.sunrise,  end: null,                    marker: true  },
+                        { label: "Dhuhr",    start: root.todayTimes.dhuhr,    end: root.todayTimes.asr,     marker: false },
+                        { label: "Asr",      start: root.todayTimes.asr,      end: root.todayTimes.maghrib, marker: false },
+                        { label: "Maghrib",  start: root.todayTimes.maghrib,  end: root.todayTimes.isha,    marker: false },
+                        { label: "Isha",     start: root.todayTimes.isha,     end: root.tomorrowTimes ? root.tomorrowTimes.fajr + 24 : null, marker: false },
+                        { label: "Midnight", start: root.todayTimes.midnight, end: null,                    marker: true  }
                     ] : []
 
                     delegate: Item {
                         required property var modelData
                         width: content.width
-                        height: 30
+                        height: modelData.marker ? 22 : 30
 
-                        readonly property bool isNext: modelData.label === root.nextName
-                        readonly property bool isCurr: root.currentWindow !== null
+                        readonly property bool isNext: !modelData.marker && modelData.label === root.nextName
+                        readonly property bool isCurr: !modelData.marker
+                                                       && root.currentWindow !== null
                                                        && modelData.label === root.currentWindow.name
                                                        && !isNext
+                        readonly property color fg: isNext ? root.accentColor
+                                                  : (isCurr ? Theme.surfaceText : Theme.surfaceVariantText)
 
                         Rectangle {
                             anchors.fill: parent
@@ -782,39 +878,64 @@ PluginComponent {
 
                         DankIcon {
                             id: rowIcon
+                            visible: !modelData.marker
                             anchors.left: parent.left
                             anchors.leftMargin: 10
                             anchors.verticalCenter: parent.verticalCenter
                             name: root.getPrayerIcon(modelData.label)
                             size: Theme.iconSize - 4
-                            color: parent.isNext ? root.accentColor
-                                 : (parent.isCurr ? Theme.surfaceText : Theme.surfaceVariantText)
+                            color: parent.fg
                         }
 
+                        // Markers are not prayers -- they bound them. Indented,
+                        // smaller and unadorned so the eye skips them.
                         StyledText {
-                            anchors.left: rowIcon.right
-                            anchors.leftMargin: Theme.spacingS
+                            anchors.left: parent.left
+                            anchors.leftMargin: modelData.marker ? 34 : (10 + Theme.iconSize - 4 + Theme.spacingS)
                             anchors.verticalCenter: parent.verticalCenter
                             text: modelData.label
-                            font.pixelSize: Theme.fontSizeMedium
+                            font.pixelSize: modelData.marker ? Theme.fontSizeSmall : Theme.fontSizeMedium
                             font.weight: (parent.isNext || parent.isCurr) ? Font.Bold : Font.Normal
-                            color: parent.isNext ? root.accentColor
-                                 : (parent.isCurr ? Theme.surfaceText : Theme.surfaceVariantText)
+                            font.italic: modelData.marker
+                            color: parent.fg
+                            opacity: modelData.marker ? 0.75 : 1
+                        }
+
+                        // Opens and closes are separate fixed columns, so a
+                        // marker's single time can never be mistaken for a
+                        // closing time.
+                        StyledText {
+                            anchors.right: parent.right
+                            anchors.rightMargin: 10 + 52 + 18
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: root.formatTime(root.hhmm(modelData.start))
+                            font.pixelSize: Theme.fontSizeSmall
+                            font.weight: (parent.isNext || parent.isCurr) ? Font.Bold : Font.Normal
+                            color: parent.fg
+                            opacity: modelData.marker ? 0.75 : 1
                         }
 
                         StyledText {
+                            visible: modelData.end !== null
+                            anchors.right: parent.right
+                            anchors.rightMargin: 10 + 52 + 4
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: "\u2192"
+                            font.pixelSize: Theme.fontSizeSmall
+                            color: parent.fg
+                            opacity: 0.45
+                        }
+
+                        StyledText {
+                            visible: modelData.end !== null
                             anchors.right: parent.right
                             anchors.rightMargin: 10
                             anchors.verticalCenter: parent.verticalCenter
-                            text: {
-                                var t = root.formatTime(root.hhmm(modelData.start))
-                                if (modelData.end === null) return t
-                                return t + "  →  " + root.formatTime(root.hhmm(modelData.end))
-                            }
+                            text: modelData.end !== null ? root.formatTime(root.hhmm(modelData.end)) : ""
                             font.pixelSize: Theme.fontSizeSmall
                             font.weight: (parent.isNext || parent.isCurr) ? Font.Bold : Font.Normal
-                            color: parent.isNext ? root.accentColor
-                                 : (parent.isCurr ? Theme.surfaceText : Theme.surfaceVariantText)
+                            color: parent.fg
+                            opacity: 0.8
                         }
                     }
                 }
