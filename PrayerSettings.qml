@@ -105,7 +105,7 @@ PluginSettings {
             spacing: Theme.spacingM
 
             StyledText {
-                text: "Location & Timing"
+                text: "Location"
                 font.pixelSize: Theme.fontSizeMedium
                 font.weight: Font.Medium
                 color: Theme.surfaceText
@@ -125,84 +125,6 @@ PluginSettings {
                 defaultValue: "0.0"
             }
 
-            StringSetting {
-                settingKey: "notifyMinutes"
-                label: "Notification Threshold (minutes)"
-                description: "How many minutes before the next prayer to send a reminder"
-                defaultValue: "15"
-            }
-        }
-    }
-
-    StyledRect {
-        width: parent.width
-        height: offsetColumn.implicitHeight + Theme.spacingL * 2
-        radius: Theme.cornerRadius
-        color: Theme.surfaceContainerHigh
-
-        Column {
-            id: offsetColumn
-            anchors.fill: parent
-            anchors.margins: Theme.spacingL
-            spacing: Theme.spacingM
-
-            StyledText {
-                text: "Prayer Time Adjustments"
-                font.pixelSize: Theme.fontSizeMedium
-                font.weight: Font.Medium
-                color: Theme.surfaceText
-            }
-
-            StyledText {
-                text: "Fine-tune prayer times by adding or subtracting minutes. Use negative values (e.g., -2) to subtract time."
-                font.pixelSize: Theme.fontSizeSmall
-                color: Theme.surfaceVariantText
-                wrapMode: Text.WordWrap
-                width: parent.width
-            }
-
-
-            StringSetting {
-                settingKey: "tuneFajr"
-                label: "Fajr Offset (minutes)"
-                description: "Adjust Fajr time (e.g., 2 or -2)"
-                defaultValue: "0"
-            }
-
-            StringSetting {
-                settingKey: "tuneSunrise"
-                label: "Sunrise Offset (minutes)"
-                description: "Adjust Sunrise time (e.g., 2 or -2)"
-                defaultValue: "0"
-            }
-
-            StringSetting {
-                settingKey: "tuneDhuhr"
-                label: "Dhuhr Offset (minutes)"
-                description: "Adjust Dhuhr time (e.g., 2 or -2)"
-                defaultValue: "0"
-            }
-
-            StringSetting {
-                settingKey: "tuneAsr"
-                label: "Asr Offset (minutes)"
-                description: "Adjust Asr time (e.g., 2 or -2)"
-                defaultValue: "0"
-            }
-
-            StringSetting {
-                settingKey: "tuneMaghrib"
-                label: "Maghrib Offset (minutes)"
-                description: "Adjust Maghrib time (e.g., 2 or -2)"
-                defaultValue: "0"
-            }
-
-            StringSetting {
-                settingKey: "tuneIsha"
-                label: "Isha Offset (minutes)"
-                description: "Adjust Isha time (e.g., 2 or -2)"
-                defaultValue: "0"
-            }
         }
     }
 
@@ -228,7 +150,7 @@ PluginSettings {
             SelectionSetting {
                 settingKey: "pillStyle"
                 label: "Bar Style"
-                description: "Spell the remaining time out, or draw it as a ring filling between one prayer and the next."
+                description: "Spell the remaining time out, or ring it with how much of the current window is spent."
                 options: [
                     { label: "Countdown text", value: "countdown" },
                     { label: "Progress ring",  value: "arc" }
@@ -238,22 +160,22 @@ PluginSettings {
 
             ToggleSetting {
                 settingKey: "iconOnly"
-                label: "Icon Only Mode"
-                description: "Show only the prayer icon in the bar, hiding the next prayer name and countdown."
+                label: "Symbol Only"
+                description: "Hide the countdown in the bar and show only the prayer's symbol"
                 defaultValue: false
             }
 
             ToggleSetting {
                 settingKey: "showSeconds"
-                label: "Show Seconds in Countdown"
-                description: "Show seconds in the countdown timer. Disabling this also reduces CPU usage by ticking once per minute instead of every second."
+                label: "Show Seconds"
+                description: "Count down to the second rather than the minute"
                 defaultValue: false
             }
 
             ToggleSetting {
                 settingKey: "use12H"
                 label: "12-Hour Format"
-                description: "Display prayer times in 12-hour format instead of 24-hour"
+                description: "Display times in 12-hour format instead of 24-hour"
                 defaultValue: false
             }
         }

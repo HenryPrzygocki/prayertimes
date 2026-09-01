@@ -21,21 +21,10 @@ PluginComponent {
     property string school: pluginData.school || "0"
     property string highLat: pluginData.highLat || "angle"
     property int hijriOffset: Number(pluginData.hijriOffset) || 0
-    property int notifyThresholdSec: (Number(pluginData.notifyMinutes) || 15) * 60
     property bool iconOnly: pluginData.iconOnly ?? false
     property bool showSeconds: pluginData.showSeconds ?? false
     property bool use12H: pluginData.use12H ?? false
     property string pillStyle: pluginData.pillStyle || "countdown"
-
-    // Per-prayer manual offsets in minutes, applied after computation.
-    property var tuneOffsets: ({
-        fajr:    Number(pluginData.tuneFajr)    || 0,
-        sunrise: Number(pluginData.tuneSunrise) || 0,
-        dhuhr:   Number(pluginData.tuneDhuhr)   || 0,
-        asr:     Number(pluginData.tuneAsr)     || 0,
-        maghrib: Number(pluginData.tuneMaghrib) || 0,
-        isha:    Number(pluginData.tuneIsha)    || 0
-    })
 
     // === Computed state ===
     // Times are fractional hours in local civil time. Tomorrow is needed because
@@ -51,10 +40,9 @@ PluginComponent {
     property string nextName: ""
     property real nextAt: 0            // fractional hours, may exceed 24 (tomorrow)
     property int nextTotalSeconds: 0
-    property bool _wasUrgent: false
-    property bool _wasAtTime: false
 
-    readonly property bool isUrgent: nextTotalSeconds > 0 && nextTotalSeconds <= notifyThresholdSec
+    // Urgent once there is under a quarter of an hour left to pray what is open.
+    readonly property bool isUrgent: spanRemainingSec > 0 && spanRemainingSec <= 900
     readonly property color accentColor: Theme.primary
     readonly property color accentBg: Qt.rgba(accentColor.r, accentColor.g, accentColor.b, 0.18)
     readonly property color subtleBg: Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.05)
@@ -73,11 +61,8 @@ PluginComponent {
     }
 
     function computeFor(date) {
-        var t = Calc.computeDay(date.getFullYear(), date.getMonth() + 1, date.getDate(),
-                                optionsFor(date))
-        for (var k in root.tuneOffsets)
-            if (t[k] !== undefined) t[k] += root.tuneOffsets[k] / 60
-        return t
+        return Calc.computeDay(date.getFullYear(), date.getMonth() + 1, date.getDate(),
+                               optionsFor(date))
     }
 
     // Prayer times are a deterministic function of the date, so this only needs
@@ -159,14 +144,30 @@ PluginComponent {
         return null
     }
 
-    readonly property int windowElapsedSec: {
-        var w = currentWindow
+    // The stretch the interface is currently describing. Between sunrise and
+    // Dhuhr no prayer is open, so the gap itself becomes the span -- which keeps
+    // one card, one bar and one countdown covering every moment of the day
+    // instead of the panel emptying out for five hours each morning.
+    readonly property var activeSpan: {
+        if (currentWindow) return currentWindow
+        if (!todayTimes) return null
+        return { name: "", start: todayTimes.sunrise, end: todayTimes.dhuhr,
+                 endLabel: "Dhuhr", gap: true }
+    }
+
+    readonly property int spanElapsedSec: {
+        var w = activeSpan
         return w ? Math.max(0, Math.round((nowHours() - w.start) * 3600)) : 0
     }
 
-    readonly property int windowRemainingSec: {
-        var w = currentWindow
+    readonly property int spanRemainingSec: {
+        var w = activeSpan
         return w ? Math.max(0, Math.round((w.end - nowHours()) * 3600)) : 0
+    }
+
+    readonly property real spanProgress: {
+        var total = spanElapsedSec + spanRemainingSec
+        return total > 0 ? spanElapsedSec / total : 0
     }
 
     // Seconds until Isha's preferred cut-off, negative once it has passed.
@@ -174,6 +175,20 @@ PluginComponent {
         var w = currentWindow
         if (!w || w.preferredEnd === undefined) return 0
         return Math.round((w.preferredEnd - nowHours()) * 3600)
+    }
+
+    // A single hue carried at different strengths across the day, brightest at
+    // noon and dimmest at night. It ties each row in the list to its band on the
+    // strip without introducing a second palette to fight the theme.
+    function daypartColor(name) {
+        var a = name === "Dhuhr"    ? 0.85
+              : name === "Asr"      ? 0.65
+              : name === "Sunrise"  ? 0.55
+              : name === "Maghrib"  ? 0.45
+              : name === "Fajr"     ? 0.32
+              : name === "Isha"     ? 0.26
+              : 0.18
+        return Qt.rgba(accentColor.r, accentColor.g, accentColor.b, a)
     }
 
     // The day as a strip: each prayer window as a proportional band running from
@@ -238,10 +253,6 @@ PluginComponent {
         var curr = idx <= 0 ? "Isha" : sched[idx - 1].name
         var next = idx < 0 ? sched[sched.length - 1] : sched[idx]
 
-        if (root.nextName !== next.name) {
-            root._wasUrgent = false
-            root._wasAtTime = false
-        }
         root.currName = curr
         root.nextName = next.name
         root.nextAt = next.at
@@ -250,25 +261,6 @@ PluginComponent {
         if (diff < 0) diff += 86400
         root.nextTotalSeconds = diff
 
-        var todayKey = Qt.formatDate(clock.date, "yyyy-MM-dd")
-        var baseKey = todayKey + "|" + root.nextName + "|" + Math.round(next.at * 60)
-
-        var urgent = diff > 0 && diff <= root.notifyThresholdSec
-        if (urgent && !root._wasUrgent) {
-            if (pluginService.loadPluginState("prayerTimes", "lastNotifiedThresholdKey", "") !== baseKey) {
-                pluginService.savePluginState("prayerTimes", "lastNotifiedThresholdKey", baseKey)
-                sendPrayerNotification()
-            }
-        }
-        var atTime = diff <= 60 && diff > 0
-        if (atTime && !root._wasAtTime) {
-            if (pluginService.loadPluginState("prayerTimes", "lastNotifiedAtKey", "") !== baseKey) {
-                pluginService.savePluginState("prayerTimes", "lastNotifiedAtKey", baseKey)
-                sendPrayerTimeNotification()
-            }
-        }
-        root._wasUrgent = urgent
-        root._wasAtTime = atTime
     }
 
     // === Display helpers ===
@@ -313,31 +305,6 @@ PluginComponent {
         return m + " min"
     }
 
-    readonly property string iconPath: {
-        var fullUrl = Qt.resolvedUrl("icon.svg").toString()
-        return fullUrl.replace("file://", "")
-    }
-
-    // === Notifications ===
-    Process { id: prayerNotifyProc; running: false }
-    Process { id: errorNotifyProc;  running: false }
-
-    function sendPrayerNotification() {
-        var mins = Math.ceil(root.nextTotalSeconds / 60)
-        prayerNotifyProc.command = [
-            "notify-send", "-a", "Prayer Widget", "-u", "critical", "-i", iconPath,
-            root.nextName + " in " + mins + " min (at " + root.formatTime(root.hhmm(root.nextAt)) + ")"
-        ]
-        prayerNotifyProc.running = true
-    }
-
-    function sendPrayerTimeNotification() {
-        prayerNotifyProc.command = [
-            "notify-send", "-a", "Prayer Widget", "-u", "critical", "-i", iconPath,
-            "Time for " + root.nextName
-        ]
-        prayerNotifyProc.running = true
-    }
 
     // === Lifecycle ===
     onPluginServiceChanged: if (pluginService) recompute()
@@ -348,7 +315,6 @@ PluginComponent {
     onSchoolChanged: debounceTimer.restart()
     onHighLatChanged: debounceTimer.restart()
     onHijriOffsetChanged: debounceTimer.restart()
-    onTuneOffsetsChanged: debounceTimer.restart()
 
     Timer {
         id: debounceTimer
@@ -572,104 +538,60 @@ PluginComponent {
                     }
                 }
 
-                // --- What is coming (primary) ---
-                // Bordered and accented: this is the thing being counted down to.
+                // --- One card for the present moment ---
+                // The two cards this replaces asked the same question twice: for
+                // four of the five prayers a window closes exactly as the next
+                // one opens, so "Maghrib in 2h 34m" and "Asr, 2h 34m left" were
+                // the same number stacked on itself. What is actually worth
+                // knowing is the deadline you are up against, so that is the
+                // headline, and the prayer it hands over to is a footnote.
                 Rectangle {
                     width: content.width
-                    height: nextCol.implicitHeight + Theme.spacingM * 2
-                    radius: 8
+                    height: stateCol.implicitHeight + Theme.spacingM * 2
+                    radius: 10
                     color: root.accentBg
-                    border.color: root.accentColor
+                    border.color: root.isUrgent ? Theme.error : root.accentColor
                     border.width: 1
 
-                    Column {
-                        id: nextCol
-                        anchors.centerIn: parent
-                        spacing: 3
-
-                        Row {
-                            spacing: Theme.spacingXS
-                            anchors.horizontalCenter: parent.horizontalCenter
-
-                            DankIcon {
-                                name: root.getPrayerIcon(root.nextName)
-                                size: Theme.iconSize - 6
-                                color: Theme.surfaceVariantText
-                                anchors.verticalCenter: parent.verticalCenter
-                            }
-
-                            StyledText {
-                                text: root.nextName !== "" ? (root.nextName + " in") : "—"
-                                font.pixelSize: Theme.fontSizeSmall
-                                color: Theme.surfaceVariantText
-                                anchors.verticalCenter: parent.verticalCenter
-                            }
-                        }
-
-                        StyledText {
-                            text: root.schedule.length > 0
-                                  ? root.formatCountdown(root.nextTotalSeconds) : "—"
-                            font.pixelSize: Theme.fontSizeLarge
-                            font.weight: Font.Bold
-                            color: root.isUrgent ? root.accentColor : Theme.surfaceText
-                            anchors.horizontalCenter: parent.horizontalCenter
-
-                            Behavior on color { ColorAnimation { duration: 400 } }
-                        }
-
-                        StyledText {
-                            text: root.schedule.length > 0
-                                  ? ("at " + root.formatTime(root.hhmm(root.nextAt))) : ""
-                            font.pixelSize: Theme.fontSizeSmall
-                            color: Theme.surfaceVariantText
-                            anchors.horizontalCenter: parent.horizontalCenter
-                        }
-                    }
-                }
-
-                // --- What is open now (secondary) ---
-                // Deliberately flatter than the card above: no border, muted fill,
-                // left-aligned rows rather than centred. Same subject, lower rank.
-                Rectangle {
-                    width: content.width
-                    height: nowCol.implicitHeight + Theme.spacingM * 2
-                    radius: 8
-                    color: root.subtleBg
+                    Behavior on border.color { ColorAnimation { duration: 400 } }
 
                     Column {
-                        id: nowCol
+                        id: stateCol
                         anchors.left: parent.left
                         anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
                         anchors.leftMargin: Theme.spacingM
                         anchors.rightMargin: Theme.spacingM
-                        spacing: 4
+                        spacing: Theme.spacingXS
 
-                        readonly property var win: root.currentWindow
+                        readonly property var span: root.activeSpan
+                        readonly property bool inGap: span !== null && span.gap === true
 
-                        // Inside a prayer's window.
+                        // What is open, and how long it has been.
                         Item {
                             width: parent.width
-                            height: nowCol.win ? openRow.implicitHeight : 0
-                            visible: nowCol.win !== null
+                            height: openRow.implicitHeight
 
                             Row {
                                 id: openRow
-                                spacing: Theme.spacingXS
                                 anchors.left: parent.left
+                                spacing: Theme.spacingXS
 
-                                StyledText {
-                                    text: nowCol.win ? nowCol.win.name : ""
-                                    font.pixelSize: Theme.fontSizeMedium
-                                    font.weight: Font.Bold
+                                DankIcon {
+                                    visible: !stateCol.inGap
+                                    width: visible ? implicitWidth : 0
+                                    name: stateCol.span ? root.getPrayerIcon(stateCol.span.name) : "mosque"
+                                    size: Theme.iconSize - 6
                                     color: Theme.surfaceText
                                     anchors.verticalCenter: parent.verticalCenter
                                 }
 
                                 StyledText {
-                                    text: "open"
-                                    font.pixelSize: Theme.fontSizeSmall
-                                    color: Theme.surfaceVariantText
+                                    text: stateCol.inGap ? "No prayer due"
+                                        : (stateCol.span ? stateCol.span.name : "")
+                                    font.pixelSize: Theme.fontSizeMedium
+                                    font.weight: Font.Bold
+                                    color: Theme.surfaceText
                                     anchors.verticalCenter: parent.verticalCenter
                                 }
                             }
@@ -677,96 +599,100 @@ PluginComponent {
                             StyledText {
                                 anchors.right: parent.right
                                 anchors.verticalCenter: openRow.verticalCenter
-                                text: nowCol.win
-                                      ? ("began " + root.formatDuration(root.windowElapsedSec) + " ago") : ""
+                                text: stateCol.inGap
+                                      ? ("since sunrise, " + root.formatDuration(root.spanElapsedSec))
+                                      : ("began " + root.formatDuration(root.spanElapsedSec) + " ago")
                                 font.pixelSize: Theme.fontSizeSmall
                                 color: Theme.surfaceVariantText
                             }
                         }
 
-                        // Time left to pray it, and what closes the window.
+                        // The deadline.
+                        StyledText {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            text: root.activeSpan ? root.formatCountdown(root.spanRemainingSec) : "—"
+                            font.pixelSize: Theme.fontSizeLarge + 6
+                            font.weight: Font.Bold
+                            color: root.isUrgent ? Theme.error : Theme.surfaceText
+
+                            Behavior on color { ColorAnimation { duration: 400 } }
+                        }
+
+                        StyledText {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            text: stateCol.inGap ? "until Dhuhr opens" : "left to pray"
+                            font.pixelSize: Theme.fontSizeSmall
+                            color: Theme.surfaceVariantText
+                        }
+
+                        Item { width: 1; height: 2 }
+
+                        // The span drawn end to end, with its bounds named.
                         Item {
                             width: parent.width
-                            height: nowCol.win ? limitRow.implicitHeight : 0
-                            visible: nowCol.win !== null
+                            height: 14
 
                             StyledText {
-                                id: limitRow
+                                id: spanFrom
                                 anchors.left: parent.left
-                                text: nowCol.win
-                                      ? (root.formatDuration(root.windowRemainingSec) + " left")
-                                      : ""
-                                font.pixelSize: Theme.fontSizeMedium
-                                font.weight: Font.Medium
-                                color: root.windowRemainingSec <= 900 ? Theme.error
-                                     : root.windowRemainingSec <= 1800 ? Theme.warning
-                                     : Theme.surfaceText
-
-                                Behavior on color { ColorAnimation { duration: 400 } }
-                            }
-
-                            StyledText {
-                                anchors.right: parent.right
-                                anchors.verticalCenter: limitRow.verticalCenter
-                                text: nowCol.win
-                                      ? ("until " + root.formatTime(root.hhmm(nowCol.win.end))
-                                         + " · " + nowCol.win.endLabel) : ""
-                                font.pixelSize: Theme.fontSizeSmall
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: stateCol.span ? root.formatTime(root.hhmm(stateCol.span.start)) : ""
+                                font.pixelSize: Theme.fontSizeSmall - 1
                                 color: Theme.surfaceVariantText
                             }
-                        }
 
-                        // How much of the window has been used up.
-                        Rectangle {
-                            width: parent.width
-                            height: 4
-                            radius: 2
-                            visible: nowCol.win !== null
-                            color: Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.10)
+                            StyledText {
+                                id: spanTo
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: stateCol.span ? root.formatTime(root.hhmm(stateCol.span.end)) : ""
+                                font.pixelSize: Theme.fontSizeSmall - 1
+                                color: Theme.surfaceVariantText
+                            }
 
                             Rectangle {
-                                height: parent.height
-                                radius: parent.radius
-                                width: {
-                                    var total = root.windowElapsedSec + root.windowRemainingSec
-                                    return total > 0
-                                         ? Math.min(1, root.windowElapsedSec / total) * parent.width : 0
-                                }
-                                color: root.windowRemainingSec <= 900 ? Theme.error
-                                     : root.windowRemainingSec <= 1800 ? Theme.warning
-                                     : root.accentColor
+                                anchors.left: spanFrom.right
+                                anchors.right: spanTo.left
+                                anchors.leftMargin: Theme.spacingS
+                                anchors.rightMargin: Theme.spacingS
+                                anchors.verticalCenter: parent.verticalCenter
+                                height: 4
+                                radius: 2
+                                color: Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g,
+                                               Theme.surfaceText.b, 0.12)
 
-                                Behavior on width { NumberAnimation { duration: 400; easing.type: Easing.OutCubic } }
+                                Rectangle {
+                                    height: parent.height
+                                    radius: parent.radius
+                                    width: Math.min(1, root.spanProgress) * parent.width
+                                    color: root.isUrgent ? Theme.error : root.accentColor
+
+                                    Behavior on width { NumberAnimation { duration: 500; easing.type: Easing.OutCubic } }
+                                    Behavior on color { ColorAnimation { duration: 400 } }
+                                }
                             }
                         }
 
-                        // Isha alone carries a preferred cut-off short of its hard one.
+                        // Where the span hands over, and Isha's earlier preferred
+                        // limit, which is the one case the two differ.
                         StyledText {
                             width: parent.width
-                            visible: nowCol.win !== null && nowCol.win.preferredEnd !== undefined
+                            horizontalAlignment: Text.AlignHCenter
                             text: {
-                                var w = nowCol.win
-                                if (!w || w.preferredEnd === undefined) return ""
-                                var left = root.preferredRemainingSec
-                                if (left <= 0)
-                                    return "past " + w.preferredLabel + " — pray without delay"
-                                return "best prayed before " + root.formatTime(root.hhmm(w.preferredEnd))
-                                     + " · " + root.formatDuration(left) + " left"
+                                if (root.schedule.length === 0) return ""
+                                var handover = "then " + root.nextName
+                                            + " at " + root.formatTime(root.hhmm(root.nextAt))
+                                var w = root.currentWindow
+                                if (w && w.preferredEnd !== undefined) {
+                                    if (root.preferredRemainingSec <= 0)
+                                        return handover + "  ·  past " + w.preferredLabel
+                                    return handover + "  ·  best before "
+                                         + root.formatTime(root.hhmm(w.preferredEnd))
+                                }
+                                return handover
                             }
                             font.pixelSize: Theme.fontSizeSmall
-                            color: root.preferredRemainingSec <= 0 ? Theme.warning : Theme.surfaceVariantText
-                            wrapMode: Text.WordWrap
-                        }
-
-                        // Between sunrise and Dhuhr nothing is owed. Say so plainly
-                        // rather than leaving the panel looking broken.
-                        StyledText {
-                            width: parent.width
-                            visible: nowCol.win === null && root.schedule.length > 0
-                            text: "No prayer due · Dhuhr opens in "
-                                  + root.formatDuration(root.nextTotalSeconds)
-                            font.pixelSize: Theme.fontSizeMedium
-                            color: Theme.surfaceVariantText
+                            color: root.preferredRemainingSec < 0 ? Theme.warning : Theme.surfaceVariantText
                             wrapMode: Text.WordWrap
                         }
                     }
@@ -802,9 +728,7 @@ PluginComponent {
                             height: 8
                             radius: 4
                             anchors.verticalCenter: parent.verticalCenter
-                            color: isCurrent ? root.accentColor
-                                             : Qt.rgba(root.accentColor.r, root.accentColor.g,
-                                                       root.accentColor.b, 0.30)
+                            color: isCurrent ? root.accentColor : root.daypartColor(modelData.name)
                         }
                     }
 
@@ -876,22 +800,27 @@ PluginComponent {
                                  : (parent.isCurr ? root.subtleBg : "transparent")
                         }
 
-                        DankIcon {
-                            id: rowIcon
-                            visible: !modelData.marker
+                        // Seven glyphs down the edge was decoration once the
+                        // strip above carried the picture. A dot in the prayer's
+                        // own daypart colour does the same anchoring work and
+                        // matches it to its band.
+                        Rectangle {
+                            id: rowDot
                             anchors.left: parent.left
-                            anchors.leftMargin: 10
+                            anchors.leftMargin: 12
                             anchors.verticalCenter: parent.verticalCenter
-                            name: root.getPrayerIcon(modelData.label)
-                            size: Theme.iconSize - 4
-                            color: parent.fg
+                            width: modelData.marker ? 4 : 7
+                            height: width
+                            radius: width / 2
+                            color: parent.isNext ? root.accentColor
+                                                 : root.daypartColor(modelData.label)
                         }
 
                         // Markers are not prayers -- they bound them. Indented,
                         // smaller and unadorned so the eye skips them.
                         StyledText {
                             anchors.left: parent.left
-                            anchors.leftMargin: modelData.marker ? 34 : (10 + Theme.iconSize - 4 + Theme.spacingS)
+                            anchors.leftMargin: modelData.marker ? 34 : 28
                             anchors.verticalCenter: parent.verticalCenter
                             text: modelData.label
                             font.pixelSize: modelData.marker ? Theme.fontSizeSmall : Theme.fontSizeMedium
