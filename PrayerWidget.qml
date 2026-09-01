@@ -53,6 +53,24 @@ PluginComponent {
     readonly property color accentBg: Qt.rgba(accentColor.r, accentColor.g, accentColor.b, 0.18)
     readonly property color subtleBg: Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.05)
 
+    // Quickshell caches an imported script by URL for the life of the process,
+    // and a plugin reload only cache-busts the .qml. So editing PrayerCalc.js
+    // and reloading leaves the old script in place, and the only symptom is a
+    // function coming back undefined somewhere deep in a binding. This names it
+    // outright instead, and is the reason the shell has to be restarted -- not
+    // reloaded -- after the maths changes.
+    function staleScriptWarning() {
+        var need = ["computeDay", "toHHMM", "hijriDate", "formatHijri",
+                    "solarAltitude", "moonPhase", "moonPhaseName"]
+        var missing = []
+        for (var i = 0; i < need.length; i++)
+            if (typeof Calc[need[i]] !== "function") missing.push(need[i])
+        if (missing.length > 0)
+            console.warn("prayerTimes: PrayerCalc.js is stale in this shell — missing "
+                         + missing.join(", ") + ". Restart dms.service; a plugin reload will not help.")
+        return missing.length > 0
+    }
+
     // === Computation ===
     function optionsFor(date) {
         return {
@@ -74,6 +92,7 @@ PluginComponent {
     // Prayer times are a deterministic function of the date, so this only needs
     // to run when the date changes -- not on a polling interval.
     function recompute() {
+        staleScriptWarning()
         if (isNaN(root.lat) || isNaN(root.lon)) {
             root.todayTimes = null
             root.tomorrowTimes = null

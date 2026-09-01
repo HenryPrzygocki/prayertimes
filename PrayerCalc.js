@@ -1,6 +1,5 @@
 .pragma library
 
-
 // Local prayer-time computation. Replaces the Aladhan HTTP API with the same
 // underlying algorithm (Zarrabi-Zadeh / PrayTimes), so no network is involved.
 //
@@ -305,3 +304,4 @@ function toHHMM(hours) {
 function toSeconds(hours) {
     return Math.round(fixHour(hours) * 3600)
 }
+
