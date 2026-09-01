@@ -90,8 +90,6 @@ PluginComponent {
         root.tomorrowTimes = computeFor(new Date(noon.getTime() + 86400000))
         root.hijriText = Calc.formatHijri(
             Calc.hijriDate(now.getFullYear(), now.getMonth() + 1, now.getDate(), root.hijriOffset))
-        root.moonPhase = Calc.moonPhase(now.getFullYear(), now.getMonth() + 1, now.getDate())
-        root.moonName = Calc.moonPhaseName(root.moonPhase)
         root.lastComputed = Qt.formatDate(now, "yyyy-MM-dd")
         updateCountdown()
 
@@ -102,6 +100,9 @@ PluginComponent {
         // and a throw here used to skip the date, the countdown and the handover
         // line, blanking most of the panel with nothing in the log to say why.
         try {
+            root.moonPhase = Calc.moonPhase(now.getFullYear(), now.getMonth() + 1, now.getDate())
+            root.moonName = Calc.moonPhaseName(root.moonPhase)
+
             // The stretch from Isha to the next dawn holds nothing but empty
             // curve, so the axis stops just outside the prayers and gives the
             // width to the part of the day that has events in it.
@@ -112,6 +113,7 @@ PluginComponent {
         } catch (e) {
             root.sunSamples = []
             root.prayerAlt = ({})
+            root.moonName = ""
             console.warn("prayerTimes: sun path unavailable —", e)
         }
     }
