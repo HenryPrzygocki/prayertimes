@@ -6,255 +6,179 @@ import qs.Common
 import qs.Services
 import qs.Widgets
 import qs.Modules.Plugins
+import "PrayerCalc.js" as Calc
 
 PluginComponent {
     id: root
     pluginId: "prayerTimes"
 
-    // Prayer times data
-    property string fajr: ""
-    property string dhuhr: ""
-    property string asr: ""
-    property string maghrib: ""
-    property string isha: ""
-    property string imsak: ""
-    property string sunrise: ""
-    property string dateHijr: ""
-    property string dateGreg: ""
-
-    // Current prayer period
-    property string currName: ""
-    property string nextName: ""
-    property string nextTime: ""
-    property int nextTimeSec: 0
-    property int nextTotalSeconds: 0
-
-    // Settings properties. Bound directly to pluginData
-    property int refreshInterval: (Number(pluginData.refreshInterval) || 5) * 60000
-    property string lat: pluginData.lat || "-6.2088"
-    property string lon: pluginData.lon || "106.8456"
-    property string method: pluginData.method || ""
+    // === Settings, bound directly to pluginData ===
+    // parseFloat tolerates the stray whitespace that creeps into hand-entered
+    // coordinates; the old code interpolated them straight into a URL.
+    property real lat: parseFloat(String(pluginData.lat || "-6.2088").trim())
+    property real lon: parseFloat(String(pluginData.lon || "106.8456").trim())
+    property string method: pluginData.method || "2"
     property string school: pluginData.school || "0"
+    property string highLat: pluginData.highLat || "angle"
+    property int hijriOffset: Number(pluginData.hijriOffset) || 0
     property int notifyThresholdSec: (Number(pluginData.notifyMinutes) || 15) * 60
     property bool iconOnly: pluginData.iconOnly ?? false
     property bool showSeconds: pluginData.showSeconds ?? false
     property bool use12H: pluginData.use12H ?? false
 
-    // Prayer time offset/tune settings (in minutes)
-    // Only for displayed properties: Imsak, Fajr, Sunrise, Dhuhr, Asr, Maghrib, Isha
-    //
-    // Imsak follows Fajr offset, otherwise it uses its own offset if set.
-    property string tuneImsak: (pluginData.tuneImsak !== "0") ? pluginData.tuneImsak : (pluginData.tuneFajr || "0")
-    property string tuneFajr: pluginData.tuneFajr || "0"
-    property string tuneSunrise: pluginData.tuneSunrise || "0"
-    property string tuneDhuhr: pluginData.tuneDhuhr || "0"
-    property string tuneAsr: pluginData.tuneAsr || "0"
-    property string tuneMaghrib: pluginData.tuneMaghrib || "0"
-    property string tuneIsha: pluginData.tuneIsha || "0"
+    // Per-prayer manual offsets in minutes, applied after computation.
+    property var tuneOffsets: ({
+        fajr:    Number(pluginData.tuneFajr)    || 0,
+        sunrise: Number(pluginData.tuneSunrise) || 0,
+        dhuhr:   Number(pluginData.tuneDhuhr)   || 0,
+        asr:     Number(pluginData.tuneAsr)     || 0,
+        maghrib: Number(pluginData.tuneMaghrib) || 0,
+        isha:    Number(pluginData.tuneIsha)    || 0
+    })
 
-    // Internal state
-    property bool fetching: false
-    property int retryCount: 0
+    // === Computed state ===
+    // Times are fractional hours in local civil time. Tomorrow is needed because
+    // after Isha the next prayer is tomorrow's Fajr, and Isha's window runs until
+    // tomorrow's dawn.
+    property var todayTimes: null
+    property var tomorrowTimes: null
+    property string hijriText: ""
+    property string lastComputed: ""
+
+    property string currName: ""
+    property string nextName: ""
+    property real nextAt: 0            // fractional hours, may exceed 24 (tomorrow)
+    property int nextTotalSeconds: 0
     property bool _wasUrgent: false
     property bool _wasAtTime: false
 
-    // UI state properties
     readonly property bool isUrgent: nextTotalSeconds > 0 && nextTotalSeconds <= notifyThresholdSec
     readonly property color accentColor: Theme.primary
     readonly property color accentBg: Qt.rgba(accentColor.r, accentColor.g, accentColor.b, 0.18)
     readonly property color subtleBg: Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.05)
 
-    // Notification processes
-    Process {
-        id: prayerNotifyProc
-        running: false
-    }
-
-    Process {
-        id: errorNotifyProc
-        running: false
-    }
-
-    // Initialize on plugin service ready
-    onPluginServiceChanged: {
-        if (pluginService) {
-            fetchOrProcess()
+    // === Computation ===
+    function optionsFor(date) {
+        return {
+            lat: root.lat,
+            lon: root.lon,
+            method: root.method,
+            asrFactor: root.school === "1" ? 2 : 1,
+            highLat: root.highLat,
+            // Resolved per date so daylight-saving transitions are handled.
+            tzOffset: -date.getTimezoneOffset() / 60
         }
     }
 
-    // Debounce settings changes
-    onLatChanged: debounceTimer.restart()
-    onLonChanged: debounceTimer.restart()
-    onMethodChanged: debounceTimer.restart()
-    onSchoolChanged: debounceTimer.restart()
-
-    // Debounce tune offset changes
-    onTuneImsakChanged: debounceTimer.restart()
-    onTuneFajrChanged: debounceTimer.restart()
-    onTuneSunriseChanged: debounceTimer.restart()
-    onTuneDhuhrChanged: debounceTimer.restart()
-    onTuneAsrChanged: debounceTimer.restart()
-    onTuneMaghribChanged: debounceTimer.restart()
-    onTuneIshaChanged: debounceTimer.restart()
-
-    // Timers
-    Timer {
-        id: debounceTimer
-        interval: 500
-        repeat: false
-        onTriggered: fetchOrProcess()
+    function computeFor(date) {
+        var t = Calc.computeDay(date.getFullYear(), date.getMonth() + 1, date.getDate(),
+                                optionsFor(date))
+        for (var k in root.tuneOffsets)
+            if (t[k] !== undefined) t[k] += root.tuneOffsets[k] / 60
+        return t
     }
 
-    Timer {
-        id: refreshTimer
-        interval: root.refreshInterval
-        running: pluginService !== null
-        repeat: true
-        triggeredOnStart: false
-        onTriggered: fetchOrProcess()
-    }
-
-    SystemClock {
-        id: clock
-        precision: root.showSeconds ? SystemClock.Seconds : SystemClock.Minutes
-        onDateChanged: {
-            if (root.nextTimeSec > 0)
-                updateCountdown()
+    // Prayer times are a deterministic function of the date, so this only needs
+    // to run when the date changes -- not on a polling interval.
+    function recompute() {
+        if (isNaN(root.lat) || isNaN(root.lon)) {
+            root.todayTimes = null
+            root.tomorrowTimes = null
+            return
         }
+        var now = new Date()
+        var noon = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12)
+        var noonTomorrow = new Date(noon.getTime() + 86400000)
+
+        root.todayTimes = computeFor(noon)
+        root.tomorrowTimes = computeFor(noonTomorrow)
+        root.hijriText = Calc.formatHijri(
+            Calc.hijriDate(now.getFullYear(), now.getMonth() + 1, now.getDate(), root.hijriOffset))
+        root.lastComputed = Qt.formatDate(now, "yyyy-MM-dd")
+        updateCountdown()
     }
 
-    Timer {
-        id: retryTimer
-        interval: 30000
-        repeat: false
-        onTriggered: {
-            root.fetching = false
-            fetchPrayerTimes()
-        }
-      }
-
-    // File path for icon.svg
-    readonly property string iconPath: {
-        let fullUrl = Qt.resolvedUrl("icon.svg").toString();
-        return fullUrl.replace("file://", ""); 
-    }
-
-    // Notification functions
-    function sendPrayerNotification() {
-        var mins = Math.ceil(root.nextTotalSeconds / 60)
-        prayerNotifyProc.command = [
-            "notify-send",
-            "-a", "Prayer Widget",
-            "-u", "critical",
-            "-i", iconPath,
-            root.nextName + " in " + mins + " min (at " + root.formatTime(root.nextTime) + ")"
+    // === Prayer periods ===
+    // The ordered list of prayer starts spanning now, closing with tomorrow's
+    // Fajr so the Isha -> Fajr countdown crosses midnight cleanly.
+    readonly property var schedule: {
+        if (!todayTimes || !tomorrowTimes) return []
+        return [
+            { name: "Fajr",    at: todayTimes.fajr },
+            { name: "Dhuhr",   at: todayTimes.dhuhr },
+            { name: "Asr",     at: todayTimes.asr },
+            { name: "Maghrib", at: todayTimes.maghrib },
+            { name: "Isha",    at: todayTimes.isha },
+            { name: "Fajr",    at: tomorrowTimes.fajr + 24 }
         ]
-        prayerNotifyProc.running = true
     }
 
-    function sendPrayerTimeNotification() {
-        prayerNotifyProc.command = [
-            "notify-send",
-            "-a", "Prayer Widget",
-            "-u", "critical",
-            "-i", iconPath,
-            "Time for " + root.nextName + ""
-        ]
-        prayerNotifyProc.running = true
+    function nowHours() {
+        var d = clock.date
+        return d.getHours() + d.getMinutes() / 60 + d.getSeconds() / 3600
     }
 
-    function sendErrorNotification(message) {
-        errorNotifyProc.command = [
-            "notify-send",
-            "-a", "Prayer Widget",
-            "-u", "critical",
-            "-i", iconPath,
-            message
-        ]
-        errorNotifyProc.running = true
-    }
-
-    // Countdown and notification logic
     function updateCountdown() {
-        var now    = clock.date
-        var nowSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()
+        var sched = root.schedule
+        if (sched.length === 0) return
 
-        // rawDiff = signed distance (negative means prayer already passed).
-        // diff    = always-positive countdown (after midnight wrap).
-        // We need rawDiff later to detect the exact prayer-time moment.
-        var rawDiff = root.nextTimeSec - nowSec
-        var diff = rawDiff
-        if (diff < 0) diff += 86400        // midnight wraparound (Isha → Fajr)
+        var h = nowHours()
+        var idx = -1
+        for (var i = 0; i < sched.length; i++)
+            if (sched[i].at > h) { idx = i; break }
 
+        // Before today's Fajr we are still inside last night's Isha.
+        var curr = idx <= 0 ? "Isha" : sched[idx - 1].name
+        var next = idx < 0 ? sched[sched.length - 1] : sched[idx]
+
+        if (root.nextName !== next.name) {
+            root._wasUrgent = false
+            root._wasAtTime = false
+        }
+        root.currName = curr
+        root.nextName = next.name
+        root.nextAt = next.at
+
+        var diff = Math.round((next.at - h) * 3600)
+        if (diff < 0) diff += 86400
         root.nextTotalSeconds = diff
 
-        var urgent = diff > 0 && diff <= root.notifyThresholdSec
         var todayKey = Qt.formatDate(clock.date, "yyyy-MM-dd")
-        var baseKey = todayKey + "|" + root.nextName + "|" + root.nextTime
+        var baseKey = todayKey + "|" + root.nextName + "|" + Math.round(next.at * 60)
 
+        var urgent = diff > 0 && diff <= root.notifyThresholdSec
         if (urgent && !root._wasUrgent) {
-            var lastNotified = pluginService.loadPluginState("prayerTimes", "lastNotifiedThresholdKey", "")
-            if (lastNotified !== baseKey) {
+            if (pluginService.loadPluginState("prayerTimes", "lastNotifiedThresholdKey", "") !== baseKey) {
                 pluginService.savePluginState("prayerTimes", "lastNotifiedThresholdKey", baseKey)
                 sendPrayerNotification()
             }
         }
-
-        var atTime = (rawDiff <= 0 && rawDiff > -60)
+        var atTime = diff <= 60 && diff > 0
         if (atTime && !root._wasAtTime) {
-            var lastAtTime = pluginService.loadPluginState("prayerTimes", "lastNotifiedAtKey", "")
-            if (lastAtTime !== baseKey) {
+            if (pluginService.loadPluginState("prayerTimes", "lastNotifiedAtKey", "") !== baseKey) {
                 pluginService.savePluginState("prayerTimes", "lastNotifiedAtKey", baseKey)
                 sendPrayerTimeNotification()
             }
         }
-
         root._wasUrgent = urgent
         root._wasAtTime = atTime
     }
 
-    // Build tune string for API
-    // Format: Imsak,Fajr,Sunrise,Dhuhr,Asr,Maghrib,Sunset,Isha,Midnight
-    // Note: Sunset and Midnight are kept fixed at 0 (not user-configurable) to keep consistent
-    // with API expectations and avoid complications, since they are not displayed or used in countdown logic.
-    function buildTuneString() {
-        return root.tuneImsak + "," +
-               root.tuneFajr + "," +
-               root.tuneSunrise + "," +
-               root.tuneDhuhr + "," +
-               root.tuneAsr + "," +
-               root.tuneMaghrib + "," +
-               "0" + "," +  // Sunset (always 0)
-               root.tuneIsha + "," +
-               "0"  // Midnight (always 0)
-    }
-
-    // Utility functions
-    function stripTimezone(timeStr) {
-        return timeStr ? timeStr.split(" ")[0] : ""
-    }
-
-    function timeToMinutes(hhmm) {
-        var parts = hhmm.split(":")
-        return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10)
+    // === Display helpers ===
+    function hhmm(hours) {
+        return Calc.toHHMM(hours)
     }
 
     function formatTime(time24h) {
         if (!time24h || time24h === "") return ""
         if (!root.use12H) return time24h
-
         var parts = time24h.split(":")
         if (parts.length < 2) return time24h
-
         var hours = parseInt(parts[0], 10)
-        var minutes = parts[1]
         var ampm = hours >= 12 ? "PM" : "AM"
-
         hours = hours % 12
         if (hours === 0) hours = 12
-        var hoursStr = hours < 10 ? "0" + hours : hours.toString()
-
-        return hoursStr + ":" + minutes + " " + ampm
+        return (hours < 10 ? "0" : "") + hours + ":" + parts[1] + " " + ampm
     }
 
     function formatCountdown(totalSeconds) {
@@ -267,204 +191,78 @@ PluginComponent {
             var ss = (s < 10 ? "0" : "") + s
             if (h > 0) return (h < 10 ? "0" : "") + h + ":" + mm + ":" + ss
             return mm + ":" + ss
-        } else {
-            var mm2 = (m < 10 ? "0" : "") + m
-            if (h > 0) return (h < 10 ? "0" : "") + h + ":" + mm2
-            return m + " min"
+        }
+        var mm2 = (m < 10 ? "0" : "") + m
+        if (h > 0) return (h < 10 ? "0" : "") + h + ":" + mm2
+        return m + " min"
+    }
+
+    readonly property string iconPath: {
+        var fullUrl = Qt.resolvedUrl("icon.svg").toString()
+        return fullUrl.replace("file://", "")
+    }
+
+    // === Notifications ===
+    Process { id: prayerNotifyProc; running: false }
+    Process { id: errorNotifyProc;  running: false }
+
+    function sendPrayerNotification() {
+        var mins = Math.ceil(root.nextTotalSeconds / 60)
+        prayerNotifyProc.command = [
+            "notify-send", "-a", "Prayer Widget", "-u", "critical", "-i", iconPath,
+            root.nextName + " in " + mins + " min (at " + root.formatTime(root.hhmm(root.nextAt)) + ")"
+        ]
+        prayerNotifyProc.running = true
+    }
+
+    function sendPrayerTimeNotification() {
+        prayerNotifyProc.command = [
+            "notify-send", "-a", "Prayer Widget", "-u", "critical", "-i", iconPath,
+            "Time for " + root.nextName
+        ]
+        prayerNotifyProc.running = true
+    }
+
+    // === Lifecycle ===
+    onPluginServiceChanged: if (pluginService) recompute()
+
+    onLatChanged: debounceTimer.restart()
+    onLonChanged: debounceTimer.restart()
+    onMethodChanged: debounceTimer.restart()
+    onSchoolChanged: debounceTimer.restart()
+    onHighLatChanged: debounceTimer.restart()
+    onHijriOffsetChanged: debounceTimer.restart()
+    onTuneOffsetsChanged: debounceTimer.restart()
+
+    Timer {
+        id: debounceTimer
+        interval: 400
+        repeat: false
+        onTriggered: root.recompute()
+    }
+
+    SystemClock {
+        id: clock
+        precision: root.showSeconds ? SystemClock.Seconds : SystemClock.Minutes
+        onDateChanged: {
+            // Recompute only when the civil date rolls over. Prayer times are
+            // indexed by the solar day, so this is the only moment they change.
+            if (Qt.formatDate(clock.date, "yyyy-MM-dd") !== root.lastComputed)
+                root.recompute()
+            else
+                root.updateCountdown()
         }
     }
 
-    function determinePrayerPeriod(nowStr, fajrT, dhuhrT, asrT, maghribT, ishaT) {
-        if (nowStr < fajrT)
-            return { currName: "Isha",    currTime: ishaT,    nextName: "Fajr",    nextTime: fajrT    }
-        if (nowStr < dhuhrT)
-            return { currName: "Fajr",    currTime: fajrT,    nextName: "Dhuhr",   nextTime: dhuhrT   }
-        if (nowStr < asrT)
-            return { currName: "Dhuhr",   currTime: dhuhrT,   nextName: "Asr",     nextTime: asrT     }
-        if (nowStr < maghribT)
-            return { currName: "Asr",     currTime: asrT,     nextName: "Maghrib", nextTime: maghribT }
-        if (nowStr < ishaT)
-            return { currName: "Maghrib", currTime: maghribT, nextName: "Isha",    nextTime: ishaT    }
-        return { currName: "Isha",    currTime: ishaT,    nextName: "Fajr",    nextTime: fajrT    }
-    }
-
-    function getTodayDataFromState() {
-        var calendarData  = pluginService.loadPluginState("prayerTimes", "calendarData",  [])
-        var fetchedMethod = pluginService.loadPluginState("prayerTimes", "fetchedMethod", "")
-        var fetchedSchool = pluginService.loadPluginState("prayerTimes", "fetchedSchool", "0")
-        var fetchedTune   = pluginService.loadPluginState("prayerTimes", "fetchedTune", "0,0,0,0,0,0,0,0,0")
-        if (!calendarData || calendarData.length === 0) return null
-        if (fetchedMethod !== root.method || fetchedSchool !== root.school) return null
-        if (fetchedTune !== buildTuneString()) return null
-        var today = Qt.formatDate(new Date(), "dd-MM-yyyy")
-        for (var i = 0; i < calendarData.length; i++) {
-            var entry = calendarData[i]
-            if (entry.date && entry.date.gregorian && entry.date.gregorian.date === today)
-                return entry
-        }
-        return null
-    }
-
-    function tryFallbackFromState() {
-        var calendarData = pluginService.loadPluginState("prayerTimes", "calendarData", [])
-        if (!calendarData || calendarData.length === 0) return
-        var today = Qt.formatDate(new Date(), "dd-MM-yyyy")
-        for (var i = 0; i < calendarData.length; i++) {
-            var entry = calendarData[i]
-            if (entry.date && entry.date.gregorian && entry.date.gregorian.date === today) {
-                processPrayerData(entry)
-                return
-            }
-        }
-        processPrayerData(calendarData[0])
-    }
-
-    function fetchOrProcess() {
-        var todayData = getTodayDataFromState()
-        if (todayData) processPrayerData(todayData)
-        else           fetchPrayerTimes()
-    }
-
-    // Force a fresh API fetch, discarding the cache completely.
-    function forceRefresh() {
-        if (root.fetching) return
-        pluginService.savePluginState("prayerTimes", "calendarData", [])
-        pluginService.savePluginState("prayerTimes", "fetchedMethod", "__force__")
-        fetchPrayerTimes()
-    }
-
-    // 7-day cache fetch:
-    function fetchPrayerTimes() {
-        if (root.fetching) return
-        root.fetching = true
-
-        var fromDate = new Date()
-        var toDate   = new Date(fromDate)
-        toDate.setDate(toDate.getDate() + 6)
-
-        var fromStr = Qt.formatDate(fromDate, "dd-MM-yyyy")
-        var toStr   = Qt.formatDate(toDate,   "dd-MM-yyyy")
-
-        var url = "https://api.aladhan.com/v1/calendar/from/" + fromStr
-                + "/to/" + toStr
-                + "?latitude="  + root.lat
-                + "&longitude=" + root.lon
-                + "&school="    + root.school
-        if (root.method !== "") url += "&method=" + root.method
-
-        // Add tune parameter for prayer time offsets
-        var tuneString = buildTuneString()
-        if (tuneString !== "0,0,0,0,0,0,0,0,0") {
-            url += "&tune=" + tuneString
-        }
-
-        var xhr = new XMLHttpRequest()
-        xhr.onreadystatechange = function() {
-            if (xhr.readyState !== XMLHttpRequest.DONE) return
-            root.fetching = false
-
-            if (xhr.status === 200) {
-                root.retryCount = 0
-                try {
-                    var json = JSON.parse(xhr.responseText)
-                    if (json.code === 200 && json.data && json.data.length > 0) {
-                        pluginService.savePluginState("prayerTimes", "calendarData",  json.data)
-                        pluginService.savePluginState("prayerTimes", "fetchedMethod", root.method)
-                        pluginService.savePluginState("prayerTimes", "fetchedSchool", root.school)
-                        pluginService.savePluginState("prayerTimes", "fetchedTune", buildTuneString())
-                        var todayStr  = Qt.formatDate(new Date(), "dd-MM-yyyy")
-                        var todayData = null
-                        for (var i = 0; i < json.data.length; i++) {
-                            if (json.data[i].date && json.data[i].date.gregorian
-                                    && json.data[i].date.gregorian.date === todayStr) {
-                                todayData = json.data[i]; break
-                            }
-                        }
-                        processPrayerData(todayData || json.data[0])
-                    } else {
-                        var fb = getTodayDataFromState()
-                        if (fb) processPrayerData(fb)
-                        else sendErrorNotification("API error: " + (json.status || "Unknown"))
-                    }
-                } catch (e) {
-                    var cached = getTodayDataFromState()
-                    if (cached) processPrayerData(cached)
-                    else sendErrorNotification("JSON parse error: " + e.message)
-                }
-
-            } else if (xhr.status === 429) {
-                root.retryCount++
-                var backoff = Math.min(30000 * Math.pow(2, root.retryCount - 1), 600000)
-                var rateFb = getTodayDataFromState()
-                if (rateFb) processPrayerData(rateFb)
-                retryTimer.interval = backoff
-                root.fetching = true
-                retryTimer.restart()
-
-            } else {
-                tryFallbackFromState()
-            }
-        }
-        xhr.open("GET", url)
-        xhr.send()
-    }
-
-    // Prayer data processing
-    function processPrayerData(data) {
-        var timings  = data.timings
-        var dateInfo = data.date
-
-        var fajrTime    = stripTimezone(timings.Fajr)
-        var dhuhrTime   = stripTimezone(timings.Dhuhr)
-        var asrTime     = stripTimezone(timings.Asr)
-        var maghribTime = stripTimezone(timings.Maghrib)
-        var ishaTime    = stripTimezone(timings.Isha)
-
-        root.fajr    = fajrTime
-        root.dhuhr   = dhuhrTime
-        root.asr     = asrTime
-        root.maghrib = maghribTime
-        root.isha    = ishaTime
-        root.imsak   = stripTimezone(timings.Imsak   || "")
-        root.sunrise = stripTimezone(timings.Sunrise || "")
-
-        root.dateGreg = dateInfo.readable || ""
-        if (dateInfo.hijri) {
-            root.dateHijr = dateInfo.hijri.day + " "
-                          + dateInfo.hijri.month.en + " "
-                          + dateInfo.hijri.year
-        }
-
-        var nowStr = Qt.formatTime(clock.date, "HH:mm")
-        var period = determinePrayerPeriod(
-            nowStr, fajrTime, dhuhrTime, asrTime, maghribTime, ishaTime
-        )
-
-        // Cache next-prayer seconds-since-midnight for fast countdown math
-        root.nextTimeSec = timeToMinutes(period.nextTime) * 60
-
-        // Reset edge detection when the prayer cycle advances so the
-        // notification can fire fresh for the new upcoming prayer.
-        if (root.nextName !== period.nextName) {
-            root._wasUrgent = false
-            root._wasAtTime = false
-        }
-
-        root.currName = period.currName
-        root.nextName = period.nextName
-        root.nextTime = period.nextTime
-
-        // Immediate UI sync — don't wait for the next SystemClock tick.
-        updateCountdown()
-    }
-
-    // Prayer icons:
+    // === Prayer icons ===
     property var prayerIcons: ({
-        "Fajr":    "bedtime",
-        "Dhuhr":   "wb_sunny",
-        "Asr":     "light_mode",
-        "Maghrib": "wb_twilight",
-        "Isha":    "bedtime"
+        "Fajr":     "bedtime",
+        "Sunrise":  "wb_twilight",
+        "Dhuhr":    "wb_sunny",
+        "Asr":      "light_mode",
+        "Maghrib":  "wb_twilight",
+        "Isha":     "bedtime",
+        "Midnight": "dark_mode"
     })
 
     function getPrayerIcon(name) {
@@ -486,8 +284,8 @@ PluginComponent {
 
             StyledText {
                 visible: !root.iconOnly
-                text: root.nextTime !== ""
-                      ? (root.nextName + " " + root.formatTime(root.nextTime))
+                text: root.schedule.length > 0
+                      ? (root.nextName + " " + root.formatTime(root.hhmm(root.nextAt)))
                       : "Loading…"
                 font.pixelSize: Theme.fontSizeSmall
                 color: Theme.surfaceText
@@ -496,24 +294,24 @@ PluginComponent {
             }
 
             StyledText {
-                visible: !root.iconOnly && root.nextTime !== ""
+                visible: !root.iconOnly && root.schedule.length > 0
                 text: "·"
                 font.pixelSize: Theme.fontSizeSmall
                 color: Theme.surfaceVariantText
                 leftPadding: 2
                 rightPadding: 2
                 anchors.verticalCenter: parent.verticalCenter
-                width: (!root.iconOnly && root.nextTime !== "") ? implicitWidth : 0
+                width: (!root.iconOnly && root.schedule.length > 0) ? implicitWidth : 0
             }
 
             StyledText {
-                visible: !root.iconOnly && root.nextTime !== ""
+                visible: !root.iconOnly && root.schedule.length > 0
                 text: root.formatCountdown(root.nextTotalSeconds)
                 font.pixelSize: Theme.fontSizeSmall
                 font.weight: root.isUrgent ? Font.Bold : Font.Normal
                 color: root.isUrgent ? root.accentColor : Theme.surfaceText
                 anchors.verticalCenter: parent.verticalCenter
-                width: (!root.iconOnly && root.nextTime !== "") ? implicitWidth : 0
+                width: (!root.iconOnly && root.schedule.length > 0) ? implicitWidth : 0
             }
         }
     }
@@ -531,7 +329,7 @@ PluginComponent {
             }
 
             StyledText {
-                visible: root.nextTime !== ""
+                visible: root.schedule.length > 0
                 text: root.formatCountdown(root.nextTotalSeconds)
                 font.pixelSize: Theme.fontSizeSmall - 2
                 color: root.isUrgent ? root.accentColor : Theme.surfaceText
@@ -565,16 +363,10 @@ PluginComponent {
                         anchors.verticalCenter: parent.verticalCenter
 
                         StyledText {
-                            text: root.dateHijr
+                            text: root.hijriText
                             font.pixelSize: Theme.fontSizeMedium
                             font.weight: Font.Bold
                             color: Theme.surfaceText
-                        }
-
-                        StyledText {
-                            text: root.dateGreg
-                            font.pixelSize: Theme.fontSizeSmall
-                            color: Theme.surfaceVariantText
                         }
                     }
 
@@ -601,7 +393,7 @@ PluginComponent {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: root.forceRefresh()
+                            onClicked: root.recompute()
                         }
                     }
                 }
@@ -628,7 +420,7 @@ PluginComponent {
                         }
 
                         StyledText {
-                            text: root.nextTime !== ""
+                            text: root.schedule.length > 0
                                   ? root.formatCountdown(root.nextTotalSeconds)
                                   : "—"
                             font.pixelSize: Theme.fontSizeLarge
@@ -640,7 +432,8 @@ PluginComponent {
                         }
 
                         StyledText {
-                            text: root.nextTime !== "" ? ("at  " + root.formatTime(root.nextTime)) : ""
+                            text: root.schedule.length > 0
+                                  ? ("at  " + root.formatTime(root.hhmm(root.nextAt))) : ""
                             font.pixelSize: Theme.fontSizeSmall
                             color: Theme.surfaceVariantText
                             anchors.horizontalCenter: parent.horizontalCenter
@@ -650,15 +443,15 @@ PluginComponent {
 
                 // Prayer times list
                 Repeater {
-                    model: [
-                        { label: "Imsak",   time: root.imsak,   icon: "moon_stars" },
-                        { label: "Fajr",    time: root.fajr,    icon: "bedtime" },
-                        { label: "Sunrise", time: root.sunrise, icon: "wb_twilight" },
-                        { label: "Dhuhr",   time: root.dhuhr,   icon: "wb_sunny" },
-                        { label: "Asr",     time: root.asr,     icon: "light_mode" },
-                        { label: "Maghrib", time: root.maghrib,  icon: "wb_twilight" },
-                        { label: "Isha",    time: root.isha,    icon: "bedtime" }
-                    ]
+                    model: root.todayTimes ? [
+                        { label: "Fajr",     time: root.hhmm(root.todayTimes.fajr),     icon: "bedtime" },
+                        { label: "Sunrise",  time: root.hhmm(root.todayTimes.sunrise),  icon: "wb_twilight" },
+                        { label: "Dhuhr",    time: root.hhmm(root.todayTimes.dhuhr),    icon: "wb_sunny" },
+                        { label: "Asr",      time: root.hhmm(root.todayTimes.asr),      icon: "light_mode" },
+                        { label: "Maghrib",  time: root.hhmm(root.todayTimes.maghrib),  icon: "wb_twilight" },
+                        { label: "Isha",     time: root.hhmm(root.todayTimes.isha),     icon: "bedtime" },
+                        { label: "Midnight", time: root.hhmm(root.todayTimes.midnight), icon: "dark_mode" }
+                    ] : []
 
                     delegate: Item {
                         width: parent.width
