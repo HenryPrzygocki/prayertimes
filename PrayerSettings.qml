@@ -225,6 +225,17 @@ PluginSettings {
                 color: Theme.surfaceText
             }
 
+            SelectionSetting {
+                settingKey: "pillStyle"
+                label: "Bar Style"
+                description: "Spell the remaining time out, or draw it as a ring filling between one prayer and the next."
+                options: [
+                    { label: "Countdown text", value: "countdown" },
+                    { label: "Progress ring",  value: "arc" }
+                ]
+                defaultValue: "countdown"
+            }
+
             ToggleSetting {
                 settingKey: "iconOnly"
                 label: "Icon Only Mode"

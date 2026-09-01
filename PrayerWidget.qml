@@ -25,6 +25,7 @@ PluginComponent {
     property bool iconOnly: pluginData.iconOnly ?? false
     property bool showSeconds: pluginData.showSeconds ?? false
     property bool use12H: pluginData.use12H ?? false
+    property string pillStyle: pluginData.pillStyle || "countdown"
 
     // Per-prayer manual offsets in minutes, applied after computation.
     property var tuneOffsets: ({
@@ -173,6 +174,24 @@ PluginComponent {
         var w = currentWindow
         if (!w || w.preferredEnd === undefined) return 0
         return Math.round((w.preferredEnd - nowHours()) * 3600)
+    }
+
+    // How far through the gap between the last prayer and the next we are, for
+    // the ring style of the bar pill.
+    readonly property real progressToNext: {
+        var s = root.schedule
+        if (s.length === 0) return 0
+        var h = nowHours()
+        var prev = null, next = null
+        for (var i = 0; i < s.length; i++)
+            if (s[i].at > h) { next = s[i]; prev = i > 0 ? s[i - 1] : null; break }
+        if (!next) return 0
+        // Before today's Fajr the interval opened with yesterday's Isha.
+        var start = prev ? prev.at
+                  : (yesterdayTimes ? yesterdayTimes.isha - 24 : next.at - 1)
+        var span = next.at - start
+        if (span <= 0) return 0
+        return Math.max(0, Math.min(1, (h - start) / span))
     }
 
     function nowHours() {
@@ -345,16 +364,71 @@ PluginComponent {
     }
 
     // Horizontal bar pill:
+    // Two ways to render the same fact. "countdown" spells the time left out;
+    // "arc" draws it as a ring filling between one prayer and the next, trading
+    // the exact figure for a smaller, more glanceable pill.
+    component PrayerRing: Item {
+        id: ring
+        property real fraction: root.progressToNext
+        property color arcColor: root.isUrgent ? root.accentColor : Theme.surfaceText
+
+        implicitWidth: Theme.iconSize + 6
+        implicitHeight: Theme.iconSize + 6
+
+        onFractionChanged: arcCanvas.requestPaint()
+        onArcColorChanged: arcCanvas.requestPaint()
+
+        Canvas {
+            id: arcCanvas
+            anchors.fill: parent
+            onPaint: {
+                var ctx = getContext("2d")
+                ctx.reset()
+                var cx = width / 2, cy = height / 2, r = width / 2 - 1.5
+                ctx.lineWidth = 2
+                ctx.lineCap = "round"
+                ctx.strokeStyle = Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g,
+                                          Theme.surfaceText.b, 0.18)
+                ctx.beginPath()
+                ctx.arc(cx, cy, r, 0, 2 * Math.PI)
+                ctx.stroke()
+
+                if (ring.fraction > 0) {
+                    ctx.strokeStyle = ring.arcColor
+                    ctx.beginPath()
+                    ctx.arc(cx, cy, r, -Math.PI / 2,
+                            -Math.PI / 2 + 2 * Math.PI * ring.fraction)
+                    ctx.stroke()
+                }
+            }
+        }
+
+        DankIcon {
+            anchors.centerIn: parent
+            name: root.getPrayerIcon(root.nextName)
+            size: Theme.iconSize - 8
+            color: ring.arcColor
+        }
+    }
+
     // The pill carries only the symbol of the prayer being counted down to and
     // the time left. The prayer's name is legible from the symbol, and its clock
     // time is one click away in the popout -- both were spending bar width to
     // say what the countdown already says.
     horizontalBarPill: Component {
         Row {
-            spacing: root.iconOnly ? 0 : Theme.spacingXS
-            rightPadding: root.iconOnly ? 0 : Theme.spacingS
+            spacing: (root.iconOnly || root.pillStyle === "arc") ? 0 : Theme.spacingXS
+            rightPadding: (root.iconOnly || root.pillStyle === "arc") ? 0 : Theme.spacingS
+
+            PrayerRing {
+                visible: root.pillStyle === "arc"
+                width: visible ? implicitWidth : 0
+                anchors.verticalCenter: parent.verticalCenter
+            }
 
             DankIcon {
+                visible: root.pillStyle !== "arc"
+                width: visible ? implicitWidth : 0
                 name: root.getPrayerIcon(root.nextName)
                 size: Theme.iconSize - 6
                 color: root.isUrgent ? root.accentColor : Theme.surfaceText
@@ -364,10 +438,11 @@ PluginComponent {
             }
 
             StyledText {
-                visible: !root.iconOnly
+                visible: root.pillStyle !== "arc" && !root.iconOnly
+                width: visible ? implicitWidth : 0
                 text: root.schedule.length > 0
                       ? root.formatCountdown(root.nextTotalSeconds)
-                      : "…"
+                      : "\u2026"
                 font.pixelSize: Theme.fontSizeSmall
                 font.weight: root.isUrgent ? Font.Bold : Font.Normal
                 color: root.isUrgent ? root.accentColor : Theme.surfaceText
@@ -383,7 +458,15 @@ PluginComponent {
         Column {
             spacing: 2
 
+            PrayerRing {
+                visible: root.pillStyle === "arc"
+                height: visible ? implicitHeight : 0
+                anchors.horizontalCenter: parent.horizontalCenter
+            }
+
             DankIcon {
+                visible: root.pillStyle !== "arc"
+                height: visible ? implicitHeight : 0
                 name: root.getPrayerIcon(root.nextName)
                 size: Theme.iconSize - 6
                 color: root.isUrgent ? root.accentColor : Theme.surfaceText
@@ -393,7 +476,8 @@ PluginComponent {
             }
 
             StyledText {
-                visible: root.schedule.length > 0
+                visible: root.pillStyle !== "arc" && root.schedule.length > 0
+                height: visible ? implicitHeight : 0
                 text: root.formatCountdown(root.nextTotalSeconds)
                 font.pixelSize: Theme.fontSizeSmall - 2
                 color: root.isUrgent ? root.accentColor : Theme.surfaceText
