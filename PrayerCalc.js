@@ -232,6 +232,29 @@ function solarAltitude(year, month, day, hourLocal, opts) {
                + dcos(lat) * dcos(sp.decl) * dcos(H))
 }
 
+// The sun's position projected onto the sky as an observer facing the equator
+// sees it: x runs east (negative, on the left) to west, z is height, and equals
+// the sine of the altitude.
+//
+//   x = cos(decl) sin(H)
+//   z = sin(decl) sin(lat) + cos(decl) cos(lat) cos(H)
+//
+// In the hour angle H these are the parametric equations of an ellipse, centred
+// at (0, sin decl sin lat) with semi-axes cos(decl) and cos(decl) cos(lat). That
+// is not a stylisation: the sun's diurnal path is a circle on the celestial
+// sphere, and a circle seen in projection is an ellipse. Plotting altitude
+// against clock time instead gives a curve whose bend is concentrated entirely
+// at noon, which is why it reads as a wedge rather than as an orbit.
+function sunSkyPoint(year, month, day, hourLocal, opts) {
+    var lat = opts.lat
+    var lon = opts.lon
+    var jd = julianDay(year, month, day) - lon / (15 * 24)
+    var sp = sunPosition(jd + hourLocal / 24)
+    var H = 15 * ((hourLocal - opts.tzOffset + lon / 15) - (12 - sp.eqt))
+    var z = dsin(sp.decl) * dsin(lat) + dcos(sp.decl) * dcos(lat) * dcos(H)
+    return { x: dcos(sp.decl) * dsin(H), z: z, alt: dasin(Math.max(-1, Math.min(1, z))) }
+}
+
 // === Moon ===
 // Phase as a fraction of the synodic month: 0 new, 0.5 full. Measured from a
 // known new moon, which is accurate to a few hours over a century -- far finer

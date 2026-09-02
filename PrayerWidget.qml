@@ -34,8 +34,6 @@ PluginComponent {
     property var todayTimes: null
     property var tomorrowTimes: null
     property var sunSamples: []
-    property real arcStart: 0
-    property real arcEnd: 24
     property real moonPhase: 0
     property string moonName: ""
     property var prayerAlt: ({})
@@ -62,7 +60,7 @@ PluginComponent {
     // reloaded -- after the maths changes.
     function staleScriptWarning() {
         var need = ["computeDay", "toHHMM", "hijriDate", "formatHijri",
-                    "solarAltitude", "moonPhase", "moonPhaseName"]
+                    "solarAltitude", "sunSkyPoint", "moonPhase", "moonPhaseName"]
         var missing = []
         for (var i = 0; i < need.length; i++)
             if (typeof Calc[need[i]] !== "function") missing.push(need[i])
@@ -123,12 +121,9 @@ PluginComponent {
             root.moonPhase = Calc.moonPhase(now.getFullYear(), now.getMonth() + 1, now.getDate())
             root.moonName = Calc.moonPhaseName(root.moonPhase)
 
-            // The stretch from Isha to the next dawn holds nothing but empty
-            // curve, so the axis stops just outside the prayers and gives the
-            // width to the part of the day that has events in it.
-            root.arcStart = root.todayTimes.fajr - 0.75
-            root.arcEnd = root.todayTimes.isha + 0.75
-            root.sunSamples = sampleSun(noon, root.arcStart, root.arcEnd)
+            // A full turn of the sky. The ellipse closes, so the night needs no
+            // cropping and the sun never leaves the frame.
+            root.sunSamples = sampleSun(noon)
             root.prayerAlt = samplePrayerAltitudes(noon)
         } catch (e) {
             root.sunSamples = []
@@ -141,13 +136,14 @@ PluginComponent {
     // The sun's altitude across the civil day, sampled once when the day rolls
     // over. The arc is then a fixed shape with only the sun moving along it,
     // which keeps the panel calm and lets the eye learn the silhouette.
-    function sampleSun(noon, from, to) {
+    function sampleSun(noon) {
         var o = optionsFor(noon)
         var y = noon.getFullYear(), m = noon.getMonth() + 1, d = noon.getDate()
         var out = []
-        for (var i = 0; i <= 144; i++) {
-            var h = from + (to - from) * i / 144
-            out.push({ h: h, alt: Calc.solarAltitude(y, m, d, h, o) })
+        for (var i = 0; i <= 240; i++) {
+            var h = i * 24 / 240
+            var pt = Calc.sunSkyPoint(y, m, d, h, o)
+            out.push({ h: h, x: pt.x, z: pt.z, alt: pt.alt })
         }
         return out
     }
@@ -188,15 +184,20 @@ PluginComponent {
     // point sits on the path rather than beside it.
     readonly property var arcMarks: {
         var t = root.todayTimes
-        if (!t) return []
+        if (!t || typeof Calc.sunSkyPoint !== "function") return []
+        var now = new Date()
+        var noon = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12)
+        var o = optionsFor(noon)
         var out = []
         var keys = [["Fajr", "fajr"], ["Dhuhr", "dhuhr"], ["Asr", "asr"],
-                    ["Maghrib", "maghrib"], ["Isha", "isha"]]
+                    ["Maghrib", "maghrib"], ["Isha", "isha"],
+                    ["Islamic midnight", "midnight"]]
         for (var i = 0; i < keys.length; i++) {
             var h = t[keys[i][1]]
-            var a = root.prayerAlt[keys[i][0]]
-            if (h === undefined || isNaN(h) || a === undefined) continue
-            out.push({ name: keys[i][0], h: h % 24, alt: a })
+            if (h === undefined || isNaN(h)) continue
+            var pt = Calc.sunSkyPoint(noon.getFullYear(), noon.getMonth() + 1,
+                                      noon.getDate(), h % 24, o)
+            out.push({ name: keys[i][0], x: pt.x, z: pt.z, alt: pt.alt })
         }
         return out
     }
@@ -204,13 +205,16 @@ PluginComponent {
 
 
 
-    readonly property real altitudeNow: {
-        var s = root.sunSamples
-        if (!s || s.length === 0) return 0
-        var f = (nowHours() - root.arcStart) / (root.arcEnd - root.arcStart)
-        var i = Math.max(0, Math.min(s.length - 1, Math.round(f * (s.length - 1))))
-        return s[i].alt
+    // Where the sun is on that ellipse right now.
+    readonly property var sunNow: {
+        var d = clock.date
+        if (!root.todayTimes || typeof Calc.sunSkyPoint !== "function") return null
+        var noon = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12)
+        return Calc.sunSkyPoint(d.getFullYear(), d.getMonth() + 1, d.getDate(),
+                                nowHours(), optionsFor(noon))
     }
+
+    readonly property real altitudeNow: sunNow ? sunNow.alt : 0
 
     // Progress across the interval between one prayer and the next, which is
     // what the bar's rule sits under.
@@ -232,11 +236,6 @@ PluginComponent {
     // when the open window is nearly over. Different facts, kept apart.
     readonly property bool nextImminent: nextTotalSeconds > 0 && nextTotalSeconds <= 900
 
-    // True through the deep night, when the sun sits outside the cropped axis.
-    readonly property bool sunOffArc: {
-        var h = nowHours()
-        return h < root.arcStart || h > root.arcEnd
-    }
 
     // === Prayer periods ===
     // The ordered list of prayer starts spanning now, closing with tomorrow's
@@ -516,20 +515,21 @@ PluginComponent {
         }
     }
 
-    // The arc the sun walks today, sampled from the same ephemeris the prayer
-    // times are cut from. It answers one question -- where the sun is -- so it
-    // carries no progress encoding; the span bar above owns that.
+    // The sun's path across the sky, drawn as the ellipse it actually is.
     //
-    // Only the two horizon crossings are labelled. Everything else is a dot on
-    // the curve in its own sky colour, matching its dot in the list below. Six
-    // labels cannot coexist on a 24-hour axis where Fajr and sunrise are seventy
-    // minutes apart -- fourteen pixels -- and the label is forty-six wide.
+    // Plotting altitude against clock time puts all the bend at noon and leaves
+    // the flanks straight, which reads as a wedge rather than an orbit. The sun's
+    // diurnal path is a circle on the celestial sphere, and a circle seen in
+    // projection is an ellipse -- so projecting it is both the truer picture and
+    // the one that looks right. It closes on itself, which also means the night
+    // needs no cropping and the sun never leaves the frame.
+    //
+    // East is on the left, as it is for an observer facing the equator.
     component SunPath: Item {
         id: sky
 
-        readonly property int padX: 14
-        readonly property real horizonY: 56
-        readonly property real nightDepth: 18
+        readonly property int padX: 12
+        readonly property int padY: 7
 
         function repaint() { skyCanvas.requestPaint() }
 
@@ -540,60 +540,61 @@ PluginComponent {
         Connections {
             target: root
             function onSunSamplesChanged() { sky.repaint() }
-            function onAltitudeNowChanged() { sky.repaint() }
-        }
-
-        function xFor(hr) {
-            var f = (hr - root.arcStart) / (root.arcEnd - root.arcStart)
-            return sky.padX + f * (sky.width - 2 * sky.padX)
+            function onSunNowChanged() { sky.repaint() }
         }
 
         Canvas {
             id: skyCanvas
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.top: parent.top
-            height: sky.horizonY + sky.nightDepth + 2
+            anchors.fill: parent
             onAvailableChanged: if (available) requestPaint()
 
             onPaint: {
                 var ctx = getContext("2d")
                 ctx.reset()
 
-                var samples = root.sunSamples
-                if (!samples || samples.length === 0) return
+                var s = root.sunSamples
+                if (!s || s.length === 0) return
 
-                var maxAlt = -90, minAlt = 90
-                for (var i = 0; i < samples.length; i++) {
-                    if (samples[i].alt > maxAlt) maxAlt = samples[i].alt
-                    if (samples[i].alt < minAlt) minAlt = samples[i].alt
+                var x0 = 9, x1 = -9, z0 = 9, z1 = -9
+                for (var i = 0; i < s.length; i++) {
+                    if (s[i].x < x0) x0 = s[i].x
+                    if (s[i].x > x1) x1 = s[i].x
+                    if (s[i].z < z0) z0 = s[i].z
+                    if (s[i].z > z1) z1 = s[i].z
                 }
-                if (maxAlt <= 0) maxAlt = 1
-                if (minAlt >= 0) minAlt = -1
+                if (x1 - x0 < 1e-6 || z1 - z0 < 1e-6) return
 
-                var hz = sky.horizonY
-                function py(alt) {
-                    return alt >= 0
-                         ? hz - (alt / maxAlt) * (hz - 8)
-                         : hz + (alt / minAlt) * sky.nightDepth
+                var px = function (x) {
+                    return sky.padX + (x - x0) / (x1 - x0) * (width - 2 * sky.padX)
                 }
+                var py = function (z) {
+                    return sky.padY + (z1 - z) / (z1 - z0) * (height - 2 * sky.padY)
+                }
+                var hz = py(0)
 
-                // Daylight, filled under the curve. The single strongest cue for
-                // reading the shape at a glance: the lit part of the day has
-                // substance, the night is bare.
-                var grad = ctx.createLinearGradient(0, 8, 0, hz)
-                grad.addColorStop(0, Qt.rgba(0.91, 0.70, 0.24, 0.22))
-                grad.addColorStop(1, Qt.rgba(0.91, 0.70, 0.24, 0.02))
+                // Ground.
+                ctx.fillStyle = Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g,
+                                        Theme.surfaceText.b, 0.045)
+                ctx.fillRect(0, hz, width, height - hz)
+
+                // Daylight, filled between the arc and the horizon.
+                var grad = ctx.createLinearGradient(0, sky.padY, 0, hz)
+                grad.addColorStop(0, Qt.rgba(0.95, 0.76, 0.30, 0.26))
+                grad.addColorStop(1, Qt.rgba(0.95, 0.76, 0.30, 0.03))
                 ctx.fillStyle = grad
                 ctx.beginPath()
-                ctx.moveTo(sky.xFor(0), hz)
-                for (var f = 0; f < samples.length; f++) {
-                    var yf = py(samples[f].alt)
-                    ctx.lineTo(sky.xFor(samples[f].h), Math.min(yf, hz))
+                var started = false
+                for (var d = 0; d < s.length; d++) {
+                    if (s[d].z < 0) continue
+                    if (!started) { ctx.moveTo(px(s[d].x), hz); started = true }
+                    ctx.lineTo(px(s[d].x), py(s[d].z))
                 }
-                ctx.lineTo(sky.xFor(24), hz)
-                ctx.closePath()
-                ctx.fill()
+                if (started) {
+                    for (var e = s.length - 1; e >= 0; e--)
+                        if (s[e].z >= 0) { ctx.lineTo(px(s[e].x), hz); break }
+                    ctx.closePath()
+                    ctx.fill()
+                }
 
                 ctx.strokeStyle = Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g,
                                           Theme.surfaceText.b, 0.20)
@@ -603,107 +604,111 @@ PluginComponent {
                 ctx.lineTo(width, hz + 0.5)
                 ctx.stroke()
 
-                // The path itself.
-                ctx.strokeStyle = Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g,
-                                          Theme.surfaceText.b, 0.34)
-                ctx.lineWidth = 1.6
+                // The whole ellipse faintly, then the daylight half over it, so
+                // the part of the turn the sun is above ground stands out.
                 ctx.lineJoin = "round"
+                ctx.lineCap = "round"
+                ctx.strokeStyle = Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g,
+                                          Theme.surfaceText.b, 0.22)
+                ctx.lineWidth = 1.4
                 ctx.beginPath()
-                for (var j = 0; j < samples.length; j++) {
-                    var xj = sky.xFor(samples[j].h), yj = py(samples[j].alt)
+                for (var j = 0; j < s.length; j++) {
+                    var xj = px(s[j].x), yj = py(s[j].z)
                     if (j === 0) ctx.moveTo(xj, yj)
                     else ctx.lineTo(xj, yj)
                 }
+                ctx.closePath()
                 ctx.stroke()
 
-                // Every prayer as a point on the path, ringed in the panel's own
-                // background so it reads clearly against the curve behind it.
+                ctx.strokeStyle = Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g,
+                                          Theme.surfaceText.b, 0.42)
+                ctx.lineWidth = 1.8
+                ctx.beginPath()
+                var pen = false
+                for (var k = 0; k < s.length; k++) {
+                    if (s[k].z < 0) { pen = false; continue }
+                    var xk = px(s[k].x), yk = py(s[k].z)
+                    if (!pen) { ctx.moveTo(xk, yk); pen = true }
+                    else ctx.lineTo(xk, yk)
+                }
+                ctx.stroke()
+
+                // Each prayer as a point on the path, ringed in the panel's own
+                // background so it reads against the curve behind it.
                 var marks = root.arcMarks
-                for (var k = 0; k < marks.length; k++) {
-                    var mk = marks[k]
-                    var cx = sky.xFor(mk.h), cy = py(mk.alt)
+                for (var n = 0; n < marks.length; n++) {
+                    var cx = px(marks[n].x), cy = py(marks[n].z)
                     ctx.beginPath()
-                    ctx.arc(cx, cy, 4.2, 0, 2 * Math.PI)
+                    ctx.arc(cx, cy, 4.4, 0, 2 * Math.PI)
                     ctx.fillStyle = Theme.surfaceContainerHigh
                     ctx.fill()
                     ctx.beginPath()
-                    ctx.arc(cx, cy, 2.8, 0, 2 * Math.PI)
-                    ctx.fillStyle = root.skyColor(mk.alt)
+                    ctx.arc(cx, cy, 2.9, 0, 2 * Math.PI)
+                    ctx.fillStyle = root.skyColor(marks[n].alt)
                     ctx.fill()
                 }
 
-                // Sunrise is not a prayer, so it is marked differently: a tick
-                // through the horizon rather than a point on the path.
-                var t = root.todayTimes
-                if (t) {
-                    ctx.strokeStyle = Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g,
-                                              Theme.surfaceText.b, 0.45)
-                    ctx.lineWidth = 1
-                    ctx.beginPath()
-                    ctx.moveTo(sky.xFor(t.sunrise), hz - 5)
-                    ctx.lineTo(sky.xFor(t.sunrise), hz + 5)
-                    ctx.stroke()
-                    ctx.beginPath()
-                    ctx.moveTo(sky.xFor(t.maghrib), hz - 5)
-                    ctx.lineTo(sky.xFor(t.maghrib), hz + 5)
-                    ctx.stroke()
-                }
-
-                // Where the sun is now.
-                var nowAlt = root.altitudeNow
-                var nowH = Math.max(root.arcStart, Math.min(root.arcEnd, root.nowHours()))
-                var sx = sky.xFor(nowH), sy = py(nowAlt)
-                var c = root.skyColor(nowAlt)
+                // Where the sun is now: filled by day, hollow by night.
+                var now = root.sunNow
+                if (!now) return
+                var sx = px(now.x), sy = py(now.z)
+                var c = root.skyColor(now.alt)
                 ctx.fillStyle = c
                 ctx.strokeStyle = c
-                ctx.globalAlpha = root.sunOffArc ? 0.12 : 0.25
+                ctx.globalAlpha = 0.25
                 ctx.beginPath(); ctx.arc(sx, sy, 11, 0, 2 * Math.PI); ctx.fill()
-                ctx.globalAlpha = root.sunOffArc ? 0.5 : 1
-                if (nowAlt >= 0) {
+                ctx.globalAlpha = 1
+                if (now.alt >= 0) {
                     ctx.beginPath(); ctx.arc(sx, sy, 5.5, 0, 2 * Math.PI); ctx.fill()
                 } else {
                     ctx.lineWidth = 1.8
                     ctx.beginPath(); ctx.arc(sx, sy, 4.5, 0, 2 * Math.PI); ctx.stroke()
                 }
-                ctx.globalAlpha = 1
             }
         }
 
-        // The two horizon crossings, set inside the arc where nothing else is,
-        // and thirteen hours apart so they cannot collide with each other.
-        // Below the arc, where nothing can overlap them. They label the two
-        // horizon crossings, which is what gives the curve its scale.
-        Repeater {
-            model: root.todayTimes ? [
-                { t: root.todayTimes.sunrise, caption: "sunrise" },
-                { t: root.todayTimes.maghrib, caption: "sunset" }
-            ] : []
+        // The horizon crossings, in the corners the ellipse leaves empty. Their
+        // sides are not a convention: facing the equator, east really is on the
+        // left, so sunrise belongs there.
+        Column {
+            anchors.left: parent.left
+            anchors.bottom: parent.bottom
+            spacing: -1
 
-            delegate: Column {
-                required property var modelData
-                width: 48
-                spacing: 0
-                x: Math.max(0, Math.min(sky.width - width, sky.xFor(modelData.t) - width / 2))
-                y: sky.horizonY + sky.nightDepth + 6
-
-                StyledText {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    text: root.formatTime(root.hhmm(modelData.t))
-                    font.pixelSize: Theme.fontSizeSmall - 1
-                    color: Theme.surfaceText
-                    opacity: 0.8
-                }
-
-                StyledText {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    text: modelData.caption
-                    font.pixelSize: Theme.fontSizeSmall - 2
-                    color: Theme.surfaceVariantText
-                    opacity: 0.6
-                }
+            StyledText {
+                text: root.todayTimes ? root.formatTime(root.hhmm(root.todayTimes.sunrise)) : ""
+                font.pixelSize: Theme.fontSizeSmall - 1
+                color: Theme.surfaceText
+                opacity: 0.8
+            }
+            StyledText {
+                text: "sunrise"
+                font.pixelSize: Theme.fontSizeSmall - 2
+                color: Theme.surfaceVariantText
+                opacity: 0.6
             }
         }
 
+        Column {
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            spacing: -1
+
+            StyledText {
+                anchors.right: parent.right
+                text: root.todayTimes ? root.formatTime(root.hhmm(root.todayTimes.maghrib)) : ""
+                font.pixelSize: Theme.fontSizeSmall - 1
+                color: Theme.surfaceText
+                opacity: 0.8
+            }
+            StyledText {
+                anchors.right: parent.right
+                text: "sunset"
+                font.pixelSize: Theme.fontSizeSmall - 2
+                color: Theme.surfaceVariantText
+                opacity: 0.6
+            }
+        }
     }
 
     // A ring around a square glyph never sat right -- circular geometry wrapped
@@ -1007,7 +1012,7 @@ PluginComponent {
                 // --- Where the sun is ---
                 SunPath {
                     width: content.width
-                    height: 110
+                    height: 104
                     visible: root.sunSamples.length > 0
                 }
 
