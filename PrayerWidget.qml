@@ -48,7 +48,8 @@ PluginComponent {
     property int nextTotalSeconds: 0
 
     // Urgent once there is under a quarter of an hour left to pray what is open.
-    readonly property bool isUrgent: spanRemainingSec > 0 && spanRemainingSec <= 900
+    readonly property bool isUrgent: currentWindow !== null
+                                     && spanRemainingSec > 0 && spanRemainingSec <= 900
     readonly property color accentColor: Theme.primary
     readonly property color accentBg: Qt.rgba(accentColor.r, accentColor.g, accentColor.b, 0.18)
     readonly property color subtleBg: Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.05)
@@ -233,11 +234,11 @@ PluginComponent {
     }
 
     // === Prayer windows ===
-    // How long each prayer may be prayed for. Every window closes when the next
-    // prayer opens, with two exceptions: Fajr closes at sunrise rather than
-    // running on to Dhuhr, and Isha runs to the following dawn -- though the
-    // majority hold that it should not be delayed past Islamic midnight, which
-    // is tracked separately as a preferred limit rather than a hard one.
+    // How long each prayer may be prayed for. Most windows close when the next
+    // prayer opens; two do not. Fajr closes at sunrise rather than running on to
+    // Dhuhr, and Isha closes at Islamic midnight -- the middle of the night --
+    // rather than at the following dawn. Isha may still be prayed after that out
+    // of necessity, but its time has ended, so midnight is the limit shown.
     //
     // Hours may fall outside [0,24) so that a window spanning midnight stays a
     // single contiguous interval.
@@ -252,14 +253,12 @@ PluginComponent {
         }
 
         return [
-            { name: "Isha",    start: y.isha - 24, end: t.fajr,       endLabel: "dawn",
-              preferredEnd: nightMidnight(y, 0),   preferredLabel: "Islamic midnight" },
-            { name: "Fajr",    start: t.fajr,      end: t.sunrise,    endLabel: "sunrise" },
-            { name: "Dhuhr",   start: t.dhuhr,     end: t.asr,        endLabel: "Asr" },
-            { name: "Asr",     start: t.asr,       end: t.maghrib,    endLabel: "Maghrib" },
-            { name: "Maghrib", start: t.maghrib,   end: t.isha,       endLabel: "Isha" },
-            { name: "Isha",    start: t.isha,      end: m.fajr + 24,  endLabel: "dawn",
-              preferredEnd: nightMidnight(t, 24),  preferredLabel: "Islamic midnight" }
+            { name: "Isha",    start: y.isha - 24, end: nightMidnight(y, 0),  endLabel: "Islamic midnight" },
+            { name: "Fajr",    start: t.fajr,      end: t.sunrise,            endLabel: "sunrise" },
+            { name: "Dhuhr",   start: t.dhuhr,     end: t.asr,                endLabel: "Asr" },
+            { name: "Asr",     start: t.asr,       end: t.maghrib,            endLabel: "Maghrib" },
+            { name: "Maghrib", start: t.maghrib,   end: t.isha,               endLabel: "Isha" },
+            { name: "Isha",    start: t.isha,      end: nightMidnight(t, 24), endLabel: "Islamic midnight" }
         ]
     }
 
@@ -279,9 +278,16 @@ PluginComponent {
     // instead of the panel emptying out for five hours each morning.
     readonly property var activeSpan: {
         if (currentWindow) return currentWindow
-        if (!todayTimes) return null
-        return { name: "", start: todayTimes.sunrise, end: todayTimes.dhuhr,
-                 endLabel: "Dhuhr", gap: true }
+        var w = root.windows
+        if (w.length === 0) return null
+        var h = nowHours()
+        // There are two stretches with nothing due: sunrise to Dhuhr, and now
+        // Islamic midnight to dawn, since Isha's time ends at midnight.
+        for (var i = 0; i < w.length - 1; i++)
+            if (h >= w[i].end && h < w[i + 1].start)
+                return { name: "", start: w[i].end, end: w[i + 1].start,
+                         endLabel: w[i + 1].name, gap: true }
+        return null
     }
 
     readonly property int spanElapsedSec: {
@@ -297,13 +303,6 @@ PluginComponent {
     readonly property real spanProgress: {
         var total = spanElapsedSec + spanRemainingSec
         return total > 0 ? spanElapsedSec / total : 0
-    }
-
-    // Seconds until Isha's preferred cut-off, negative once it has passed.
-    readonly property int preferredRemainingSec: {
-        var w = currentWindow
-        if (!w || w.preferredEnd === undefined) return 0
-        return Math.round((w.preferredEnd - nowHours()) * 3600)
     }
 
     readonly property string spanSymbol: {
@@ -928,23 +927,14 @@ PluginComponent {
                                 if (w.gap) return "No prayer due yet"
 
                                 var handsOver = Math.abs(w.end - root.nextAt) < 1 / 120
-                                var line = handsOver
-                                         ? (w.name + " is open until then")
-                                         : (w.name + " is open — " + root.formatSplit(root.spanRemainingSec)
-                                            + " left, until " + root.formatTime(root.hhmm(w.end)))
-
-                                var cw = root.currentWindow
-                                if (cw && cw.preferredEnd !== undefined) {
-                                    line += root.preferredRemainingSec > 0
-                                          ? (" · best prayed before " + root.formatTime(root.hhmm(cw.preferredEnd)))
-                                          : " · past Islamic midnight"
-                                }
-                                return line
+                                if (handsOver) return w.name + " is open until then"
+                                return w.name + " is open — " + root.formatSplit(root.spanRemainingSec)
+                                     + " left, until " + root.formatTime(root.hhmm(w.end))
+                                     + " · " + w.endLabel
                             }
                             font.pixelSize: Theme.fontSizeSmall
                             font.weight: root.isUrgent ? Font.Medium : Font.Normal
-                            color: root.isUrgent ? Theme.error
-                                 : (root.preferredRemainingSec < 0 ? Theme.warning : Theme.surfaceVariantText)
+                            color: root.isUrgent ? Theme.error : Theme.surfaceVariantText
                             wrapMode: Text.WordWrap
 
                             Behavior on color { ColorAnimation { duration: 400 } }
@@ -1067,7 +1057,7 @@ PluginComponent {
                         { label: "Dhuhr",            start: root.todayTimes.dhuhr,    end: root.todayTimes.asr,     marker: false },
                         { label: "Asr",              start: root.todayTimes.asr,      end: root.todayTimes.maghrib, marker: false },
                         { label: "Maghrib",          start: root.todayTimes.maghrib,  end: root.todayTimes.isha,    marker: false },
-                        { label: "Isha",             start: root.todayTimes.isha,     end: root.tomorrowTimes ? root.tomorrowTimes.fajr + 24 : null, marker: false },
+                        { label: "Isha",             start: root.todayTimes.isha,     end: root.todayTimes.midnight, marker: false },
                         { label: "Islamic midnight", start: root.todayTimes.midnight, end: null,                    marker: true  }
                     ] : []
 

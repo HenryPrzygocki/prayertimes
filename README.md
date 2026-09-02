@@ -11,9 +11,10 @@ prayer times, computed locally from the sun's position.
   they are calculated on this machine. Works offline, cannot be rate limited, and your
   coordinates are never sent anywhere.
 - **Prayers as windows, not instants.** Each prayer shows when it opens, when it closes, and how
-  much of it is left — including the fact that Fajr closes at sunrise rather than running on to
-  Dhuhr, leaving a stretch of the morning where no prayer is due.
-- **Islamic midnight**, tracked as Isha's preferred cut-off alongside its hard limit at dawn.
+  much of it is left. Most close as the next one opens; two do not. Fajr closes at sunrise rather
+  than running on to Dhuhr, and Isha closes at Islamic midnight — the middle of the night — rather
+  than at the following dawn. Both leave a stretch with no prayer due, and the widget says so
+  outright rather than going blank.
 - **Hijri date**, with an adjustment for calendars set by local moonsighting.
 - 22 calculation methods, both Asr schools, angle-based high-latitude handling, and a polar clamp.
 
