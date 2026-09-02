@@ -1,7 +1,13 @@
 # Verification harness
 
-Cross-checks `PrayerCalc.js` against the Aladhan API, which is what this plugin
+Cross-checks the calculation against the Aladhan API, which is what this plugin
 used to call at runtime.
+
+The maths lives inside `PrayerWidget.qml`, between the `BEGIN CALC` / `END CALC`
+markers, because Quickshell caches a script imported from a separate file by URL
+for the life of the process — so edits to it did not take effect on a plugin
+reload, only on a shell restart. The region is plain function declarations and
+nothing else, and `extract.mjs` lifts it out unchanged to run here.
 
 ```bash
 node fetchcache.mjs   # snapshot API responses to apicache.json (slow, rate-limited)

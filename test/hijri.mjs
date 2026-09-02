@@ -1,6 +1,6 @@
 import fs from "node:fs"
-const src=fs.readFileSync("/home/henry/.config/DankMaterialShell/plugins/prayerTimes/PrayerCalc.js","utf8").replace(".pragma library","")
-const C={}; new Function("e",src+"\n;Object.assign(e,{hijriDate,julianDay})")(C)
+import { loadCalc } from "./extract.mjs"
+const C = loadCalc()
 
 // sample the 1st, 10th and 20th of each Gregorian month over 2 years
 const samples=[]

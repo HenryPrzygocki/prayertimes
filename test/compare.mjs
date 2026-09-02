@@ -1,8 +1,7 @@
 import fs from "node:fs"
 import { execSync } from "node:child_process"
-const src = fs.readFileSync("/home/henry/.config/DankMaterialShell/plugins/prayerTimes/PrayerCalc.js","utf8").replace(".pragma library","")
-const Calc = {}
-new Function("exports", src + "\n;Object.assign(exports,{computeDay,toHHMM,METHODS})")(Calc)
+import { loadCalc } from "./extract.mjs"
+const Calc = loadCalc()
 const cache = JSON.parse(fs.readFileSync("apicache.json","utf8"))
 const CITIES = Object.fromEntries(JSON.parse(fs.readFileSync("cities.json","utf8")).map(c=>[c.name,c]))
 
