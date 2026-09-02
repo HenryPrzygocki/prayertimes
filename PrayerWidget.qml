@@ -212,6 +212,26 @@ PluginComponent {
         return s[i].alt
     }
 
+    // Progress across the interval between one prayer and the next, which is
+    // what the bar's rule sits under.
+    readonly property real progressToNext: {
+        var sc = root.schedule
+        if (sc.length === 0) return 0
+        var h = nowHours()
+        var prev = null, next = null
+        for (var i = 0; i < sc.length; i++)
+            if (sc[i].at > h) { next = sc[i]; prev = i > 0 ? sc[i - 1] : null; break }
+        if (!next) return 0
+        var start = prev ? prev.at
+                  : (yesterdayTimes ? yesterdayTimes.isha - 24 : next.at - 1)
+        var span = next.at - start
+        return span > 0 ? Math.max(0, Math.min(1, (h - start) / span)) : 0
+    }
+
+    // The bar reddens when the next prayer is nearly here; the panel reddens
+    // when the open window is nearly over. Different facts, kept apart.
+    readonly property bool nextImminent: nextTotalSeconds > 0 && nextTotalSeconds <= 900
+
     // True through the deep night, when the sun sits outside the cropped axis.
     readonly property bool sunOffArc: {
         var h = nowHours()
@@ -305,11 +325,6 @@ PluginComponent {
         return total > 0 ? spanElapsedSec / total : 0
     }
 
-    readonly property string spanSymbol: {
-        var w = activeSpan
-        if (!w) return nextName
-        return (w.gap || w.name === "") ? nextName : w.name
-    }
 
 
 
@@ -705,10 +720,10 @@ PluginComponent {
                 anchors.horizontalCenter: parent.horizontalCenter
 
                 DankIcon {
-                    name: root.getPrayerIcon(root.spanSymbol)
-                    fill: root.getPrayerFill(root.spanSymbol)
+                    name: root.getPrayerIcon(root.nextName)
+                    fill: root.getPrayerFill(root.nextName)
                     size: Theme.iconSize - 6
-                    color: root.isUrgent ? Theme.error : Theme.surfaceText
+                    color: root.nextImminent ? Theme.error : Theme.surfaceText
                     anchors.verticalCenter: parent.verticalCenter
 
                     Behavior on color { ColorAnimation { duration: 400 } }
@@ -717,10 +732,10 @@ PluginComponent {
                 StyledText {
                     visible: !root.iconOnly
                     width: visible ? implicitWidth : 0
-                    text: root.schedule.length > 0 ? root.formatSplit(root.spanRemainingSec) : "\u2026"
+                    text: root.schedule.length > 0 ? root.formatSplit(root.nextTotalSeconds) : "\u2026"
                     font.pixelSize: Theme.fontSizeSmall
-                    font.weight: root.isUrgent ? Font.Bold : Font.Normal
-                    color: root.isUrgent ? Theme.error : Theme.surfaceText
+                    font.weight: root.nextImminent ? Font.Bold : Font.Normal
+                    color: root.nextImminent ? Theme.error : Theme.surfaceText
                     anchors.verticalCenter: parent.verticalCenter
 
                     Behavior on color { ColorAnimation { duration: 400 } }
@@ -738,8 +753,8 @@ PluginComponent {
                 Rectangle {
                     height: parent.height
                     radius: parent.radius
-                    width: Math.min(1, root.spanProgress) * parent.width
-                    color: root.isUrgent ? Theme.error : root.accentColor
+                    width: Math.min(1, root.progressToNext) * parent.width
+                    color: root.nextImminent ? Theme.error : root.accentColor
 
                     Behavior on width { NumberAnimation { duration: 500; easing.type: Easing.OutCubic } }
                 }
@@ -752,10 +767,10 @@ PluginComponent {
             spacing: 2
 
             DankIcon {
-                name: root.getPrayerIcon(root.spanSymbol)
-                fill: root.getPrayerFill(root.spanSymbol)
+                name: root.getPrayerIcon(root.nextName)
+                fill: root.getPrayerFill(root.nextName)
                 size: Theme.iconSize - 6
-                color: root.isUrgent ? Theme.error : Theme.surfaceText
+                color: root.nextImminent ? Theme.error : Theme.surfaceText
                 anchors.horizontalCenter: parent.horizontalCenter
 
                 Behavior on color { ColorAnimation { duration: 400 } }
@@ -763,9 +778,9 @@ PluginComponent {
 
             StyledText {
                 visible: root.schedule.length > 0
-                text: root.formatSplit(root.spanRemainingSec)
+                text: root.formatSplit(root.nextTotalSeconds)
                 font.pixelSize: Theme.fontSizeSmall - 2
-                color: root.isUrgent ? Theme.error : Theme.surfaceText
+                color: root.nextImminent ? Theme.error : Theme.surfaceText
                 anchors.horizontalCenter: parent.horizontalCenter
             }
         }
@@ -915,30 +930,6 @@ PluginComponent {
                             color: Theme.surfaceText
                         }
 
-                        // The window you are inside, stated as a sentence so it
-                        // needs no decoding. It repeats no figure the line above
-                        // already gives -- when the window closes exactly as the
-                        // next prayer opens, it simply says so.
-                        StyledText {
-                            width: parent.width
-                            text: {
-                                var w = root.activeSpan
-                                if (!w) return ""
-                                if (w.gap) return "No prayer due yet"
-
-                                var handsOver = Math.abs(w.end - root.nextAt) < 1 / 120
-                                if (handsOver) return w.name + " is open until then"
-                                return w.name + " is open — " + root.formatSplit(root.spanRemainingSec)
-                                     + " left, until " + root.formatTime(root.hhmm(w.end))
-                                     + " · " + w.endLabel
-                            }
-                            font.pixelSize: Theme.fontSizeSmall
-                            font.weight: root.isUrgent ? Font.Medium : Font.Normal
-                            color: root.isUrgent ? Theme.error : Theme.surfaceVariantText
-                            wrapMode: Text.WordWrap
-
-                            Behavior on color { ColorAnimation { duration: 400 } }
-                        }
                     }
                 }
 
@@ -994,26 +985,29 @@ PluginComponent {
                         }
                     }
 
+                    // What is open and how much of it is left. How long ago it
+                    // began is the one number here nobody acts on.
                     StyledText {
                         width: parent.width
                         horizontalAlignment: Text.AlignHCenter
                         text: {
                             var w = root.activeSpan
                             if (!w) return ""
-                            var began = "began " + root.formatDuration(root.spanElapsedSec) + " ago"
-                            return w.gap ? ("between prayers · " + began)
-                                         : (w.name + " window · " + began)
+                            if (w.gap) return "No prayer due"
+                            return w.name + "  ·  " + root.formatSplit(root.spanRemainingSec) + " remaining"
                         }
-                        font.pixelSize: Theme.fontSizeSmall - 2
-                        color: Theme.surfaceVariantText
-                        opacity: 0.8
+                        font.pixelSize: Theme.fontSizeSmall
+                        font.weight: root.isUrgent ? Font.Medium : Font.Normal
+                        color: root.isUrgent ? Theme.error : Theme.surfaceVariantText
+
+                        Behavior on color { ColorAnimation { duration: 400 } }
                     }
                 }
 
                 // --- Where the sun is ---
                 SunPath {
                     width: content.width
-                    height: 98
+                    height: 110
                     visible: root.sunSamples.length > 0
                 }
 
@@ -1074,16 +1068,16 @@ PluginComponent {
 
                         // State lives in the row's fill and weight; identity lives
                         // in the dot's colour. Two channels, never mixed.
+                        // Only what is open gets a fill. What is next is said in
+                        // words, so two rows are never lit at once.
                         Rectangle {
                             anchors.fill: parent
                             anchors.topMargin: 1
                             anchors.bottomMargin: 1
                             radius: height / 2
-                            color: parent.isNext
+                            color: parent.isCurr
                                    ? Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.14)
-                                   : (parent.isCurr
-                                      ? Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.06)
-                                      : "transparent")
+                                   : "transparent"
                         }
 
                         Rectangle {
@@ -1096,41 +1090,70 @@ PluginComponent {
                             color: root.prayerColor(modelData.label)
                         }
 
-                        StyledText {
+                        Row {
                             anchors.left: parent.left
                             anchors.leftMargin: modelData.marker ? 30 : 28
                             anchors.verticalCenter: parent.verticalCenter
-                            text: modelData.label
-                            font.pixelSize: modelData.marker ? Theme.fontSizeSmall : Theme.fontSizeMedium
-                            font.weight: (parent.isNext || parent.isCurr) ? Font.Bold : Font.Normal
-                            font.italic: modelData.marker
-                            color: parent.isNext ? Theme.primary : Theme.surfaceText
-                            opacity: modelData.marker ? 0.75 : 1
+                            spacing: 5
+
+                            StyledText {
+                                text: modelData.label
+                                font.pixelSize: modelData.marker ? Theme.fontSizeSmall : Theme.fontSizeMedium
+                                font.weight: isCurr ? Font.Bold : Font.Normal
+                                font.italic: modelData.marker
+                                color: Theme.surfaceText
+                                opacity: modelData.marker ? 0.75 : 1
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+
+                            StyledText {
+                                visible: isNext
+                                text: "upcoming"
+                                font.pixelSize: Theme.fontSizeSmall - 2
+                                font.italic: true
+                                color: Theme.surfaceVariantText
+                                opacity: 0.8
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
                         }
 
                         // Two right-aligned columns. The headers name them, so no
                         // arrow is needed in seven consecutive rows.
                         StyledText {
+                            visible: !modelData.marker
                             anchors.right: parent.right
                             anchors.rightMargin: 84
                             anchors.verticalCenter: parent.verticalCenter
                             text: root.formatTime(root.hhmm(modelData.start))
                             font.pixelSize: Theme.fontSizeSmall
-                            font.weight: (parent.isNext || parent.isCurr) ? Font.Bold : Font.Normal
-                            color: parent.isNext ? Theme.primary : Theme.surfaceText
-                            opacity: modelData.marker ? 0.75 : 1
+                            font.weight: isCurr ? Font.Bold : Font.Normal
+                            color: Theme.surfaceText
                         }
 
                         StyledText {
+                            visible: !modelData.marker
                             anchors.right: parent.right
                             anchors.rightMargin: 12
                             anchors.verticalCenter: parent.verticalCenter
                             text: modelData.end !== null
-                                  ? root.formatTime(root.hhmm(modelData.end)) : "·"
+                                  ? root.formatTime(root.hhmm(modelData.end)) : ""
                             font.pixelSize: Theme.fontSizeSmall
-                            font.weight: (parent.isNext || parent.isCurr) ? Font.Bold : Font.Normal
-                            color: parent.isNext ? Theme.primary : Theme.surfaceText
-                            opacity: modelData.end === null ? 0.35 : (modelData.marker ? 0.75 : 0.85)
+                            font.weight: isCurr ? Font.Bold : Font.Normal
+                            color: Theme.surfaceText
+                            opacity: 0.85
+                        }
+
+                        // Sunrise and Islamic midnight open and close nothing, so
+                        // their single time sits centred across both columns
+                        // rather than pretending to be an opening time.
+                        StyledText {
+                            visible: modelData.marker
+                            x: parent.width - 122 + (110 - width) / 2
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: root.formatTime(root.hhmm(modelData.start))
+                            font.pixelSize: Theme.fontSizeSmall
+                            color: Theme.surfaceText
+                            opacity: 0.75
                         }
                     }
                 }
