@@ -8,64 +8,15 @@ PluginSettings {
     pluginId: "prayerTimes"
 
     // === Coordinate lookup ===
-    // The only network the plugin ever touches, and only when the button is
-    // pressed. It proposes rather than applies: an IP lookup frequently resolves
-    // to the ISP's exchange rather than to where you are -- measured here at
-    // 163 km out, which moves every prayer by three to six minutes -- so
-    // overwriting good coordinates with it unattended would be a downgrade.
-    property bool detecting: false
-    property real detectStartedAt: 0
-    property string detectStatus: ""
-    property bool detectFailed: false
-    property real foundLat: NaN
-    property real foundLon: NaN
-    property string foundPlace: ""
-    readonly property bool hasCandidate: !isNaN(foundLat) && !isNaN(foundLon)
-
-    function currentCoord(key) {
-        return parseFloat(String(root.loadValue(key, "0")).trim())
-    }
-
-    function distanceKm(lat1, lon1, lat2, lon2) {
-        var r = Math.PI / 180
-        var a = Math.sin((lat2 - lat1) * r / 2) * Math.sin((lat2 - lat1) * r / 2)
-              + Math.cos(lat1 * r) * Math.cos(lat2 * r)
-              * Math.sin((lon2 - lon1) * r / 2) * Math.sin((lon2 - lon1) * r / 2)
-        return 2 * 6371 * Math.asin(Math.min(1, Math.sqrt(a)))
-    }
-
-    function detectLocation() {
-        var now = Date.now()
-        // Guard a double click without latching forever if a request hangs.
-        if (root.detecting && now - root.detectStartedAt < 15000)
-            return
-        root.detecting = true
-        root.detectStartedAt = now
-        root.detectFailed = false
-        root.detectStatus = ""
-        root.foundLat = NaN
-        root.foundLon = NaN
-
-        // ipinfo first: it answered when ipapi.co returned nothing usable.
-        root.lookup("https://ipinfo.io/json", function (j) {
-            if (!j.loc)
-                return null
-            var parts = String(j.loc).split(",")
-            return { lat: Number(parts[0]), lon: Number(parts[1]),
-                     place: root.placeName([j.city, j.region, j.country]) }
-        }, function () {
-            root.lookup("https://ipapi.co/json/", function (j) {
-                if (j.latitude === undefined || j.longitude === undefined)
-                    return null
-                return { lat: Number(j.latitude), lon: Number(j.longitude),
-                         place: root.placeName([j.city, j.region, j.country_name]) }
-            }, function () {
-                root.detecting = false
-                root.detectFailed = true
-                root.detectStatus = "No location service could be reached."
-            })
-        })
-    }
+    // Search by place name, not by IP. An IP lookup answers "where does my
+    // traffic leave the network", which behind a VPN is a different question
+    // from "where am I", and even without one it resolves to the provider's
+    // exchange -- measured 163 km out from here. A name search asks the question
+    // actually being asked, and a VPN cannot affect the answer.
+    property var placeResults: []
+    property bool searching: false
+    property real searchStartedAt: 0
+    property string searchStatus: ""
 
     function placeName(parts) {
         var out = []
@@ -74,49 +25,64 @@ PluginSettings {
         return out.join(", ")
     }
 
-    function lookup(url, parse, onFail) {
+    function searchPlace(query) {
+        var q = String(query).trim()
+        root.placeResults = []
+        if (q.length < 2) {
+            root.searchStatus = ""
+            return
+        }
+        var now = Date.now()
+        if (root.searching && now - root.searchStartedAt < 15000)
+            return
+        root.searching = true
+        root.searchStartedAt = now
+        root.searchStatus = ""
+
         var xhr = new XMLHttpRequest()
         xhr.onreadystatechange = function () {
             if (xhr.readyState !== XMLHttpRequest.DONE)
                 return
-            var found = null
-            if (xhr.status === 200) {
-                try {
-                    found = parse(JSON.parse(xhr.responseText))
-                } catch (e) {
-                    found = null
-                }
+            root.searching = false
+            if (xhr.status !== 200) {
+                root.searchStatus = "Could not reach the place directory."
+                return
             }
-            if (found && isFinite(found.lat) && isFinite(found.lon)
-                    && Math.abs(found.lat) <= 90 && Math.abs(found.lon) <= 180)
-                root.presentCandidate(found)
-            else
-                onFail()
+            var found = []
+            try {
+                var hits = JSON.parse(xhr.responseText).results || []
+                for (var i = 0; i < hits.length; i++) {
+                    var h = hits[i]
+                    if (!isFinite(h.latitude) || !isFinite(h.longitude))
+                        continue
+                    found.push({ label: root.placeName([h.name, h.admin1, h.country]),
+                                 lat: h.latitude, lon: h.longitude,
+                                 population: h.population || 0 })
+                }
+            } catch (e) {
+                root.searchStatus = "Could not read the response."
+                return
+            }
+            // The directory returns matches in its own order, which buried a town
+            // of sixty thousand below several of a few thousand. Largest first is
+            // the better guess at which one was meant.
+            found.sort(function (a, b) { return b.population - a.population })
+            root.placeResults = found.slice(0, 8)
+            root.searchStatus = found.length > 0 ? "" : "Nothing found for \u201c" + q + "\u201d."
         }
-        xhr.open("GET", url)
+        xhr.open("GET", "https://geocoding-api.open-meteo.com/v1/search"
+                      + "?count=10&language=en&format=json&name=" + encodeURIComponent(q))
         xhr.send()
     }
 
-    function presentCandidate(found) {
-        root.detecting = false
-        root.detectFailed = false
-        root.foundLat = found.lat
-        root.foundLon = found.lon
-        root.foundPlace = found.place
-        root.detectStatus = (found.place ? found.place + "  ·  " : "")
-                          + found.lat.toFixed(4) + ", " + found.lon.toFixed(4)
-    }
-
-    function applyCandidate() {
-        if (!root.hasCandidate)
-            return
-        // Four decimals is about eleven metres; more would be false precision
-        // on a number this approximate to begin with.
-        root.saveValue("lat", root.foundLat.toFixed(4))
-        root.saveValue("lon", root.foundLon.toFixed(4))
-        root.detectStatus = "Applied " + root.foundLat.toFixed(4) + ", " + root.foundLon.toFixed(4)
-        root.foundLat = NaN
-        root.foundLon = NaN
+    function applyPlace(place) {
+        // Four decimals is about eleven metres, far finer than any prayer time
+        // resolves to.
+        root.saveValue("lat", place.lat.toFixed(4))
+        root.saveValue("lon", place.lon.toFixed(4))
+        root.placeResults = []
+        root.searchStatus = "Set to " + place.label + "  \u00b7  "
+                          + place.lat.toFixed(4) + ", " + place.lon.toFixed(4)
     }
 
     StyledText {
@@ -241,110 +207,76 @@ PluginSettings {
                 width: parent.width
                 spacing: Theme.spacingXS
 
-                StyledRect {
+                StyledText {
                     width: parent.width
-                    height: 38
-                    radius: Theme.cornerRadius
-                    color: detectArea.containsMouse
-                           ? Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.22)
-                           : Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.12)
+                    text: "Or find it by name"
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: Theme.surfaceVariantText
+                }
 
-                    Row {
-                        anchors.centerIn: parent
-                        spacing: Theme.spacingS
+                DankTextField {
+                    id: placeField
+                    width: parent.width
+                    placeholderText: root.searching ? "Searching…" : "Town or city, then Enter"
+                    onEditingFinished: root.searchPlace(text)
+                }
 
-                        DankIcon {
-                            name: root.detecting ? "sync" : "my_location"
-                            size: Theme.iconSize - 6
-                            color: Theme.primary
+                StyledText {
+                    width: parent.width
+                    visible: root.searchStatus !== ""
+                    text: root.searchStatus
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: Theme.surfaceText
+                    wrapMode: Text.WordWrap
+                }
+
+                Repeater {
+                    model: root.placeResults
+
+                    delegate: StyledRect {
+                        required property var modelData
+                        width: placeField.width
+                        height: 38
+                        radius: Theme.cornerRadius
+                        color: hitArea.containsMouse
+                               ? Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.18)
+                               : Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.06)
+
+                        StyledText {
+                            anchors.left: parent.left
+                            anchors.leftMargin: Theme.spacingM
+                            anchors.right: coords.left
+                            anchors.rightMargin: Theme.spacingS
                             anchors.verticalCenter: parent.verticalCenter
+                            text: modelData.label
+                            font.pixelSize: Theme.fontSizeSmall
+                            color: Theme.surfaceText
+                            elide: Text.ElideRight
                         }
 
                         StyledText {
-                            text: root.detecting ? "Looking up…" : "Detect my coordinates"
-                            font.pixelSize: Theme.fontSizeMedium
-                            font.weight: Font.Medium
-                            color: Theme.primary
+                            id: coords
+                            anchors.right: parent.right
+                            anchors.rightMargin: Theme.spacingM
                             anchors.verticalCenter: parent.verticalCenter
+                            text: modelData.lat.toFixed(2) + ", " + modelData.lon.toFixed(2)
+                            font.pixelSize: Theme.fontSizeSmall - 1
+                            color: Theme.surfaceVariantText
+                        }
+
+                        MouseArea {
+                            id: hitArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.applyPlace(modelData)
                         }
                     }
-
-                    MouseArea {
-                        id: detectArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: root.detectLocation()
-                    }
                 }
 
                 StyledText {
                     width: parent.width
-                    visible: root.detectStatus !== ""
-                    text: root.detectStatus
-                    font.pixelSize: Theme.fontSizeSmall
-                    font.weight: root.hasCandidate ? Font.Medium : Font.Normal
-                    color: root.detectFailed ? Theme.error : Theme.surfaceText
-                    wrapMode: Text.WordWrap
-                }
-
-                // How far the proposal sits from what is configured, which is the
-                // number that tells you whether to trust it.
-                StyledText {
-                    width: parent.width
-                    visible: root.hasCandidate
-                    text: {
-                        if (!root.hasCandidate)
-                            return ""
-                        var d = root.distanceKm(root.currentCoord("lat"), root.currentCoord("lon"),
-                                                root.foundLat, root.foundLon)
-                        if (!isFinite(d))
-                            return "No current coordinates to compare against."
-                        if (d < 1)
-                            return "Within a kilometre of your current setting."
-                        return Math.round(d) + " km from your current setting"
-                             + (d > 25 ? " — check this before applying." : ".")
-                    }
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: {
-                        var d = root.hasCandidate
-                              ? root.distanceKm(root.currentCoord("lat"), root.currentCoord("lon"),
-                                                root.foundLat, root.foundLon)
-                              : 0
-                        return (isFinite(d) && d > 25) ? Theme.warning : Theme.surfaceVariantText
-                    }
-                    wrapMode: Text.WordWrap
-                }
-
-                StyledRect {
-                    width: parent.width
-                    height: 34
-                    visible: root.hasCandidate
-                    radius: Theme.cornerRadius
-                    color: applyArea.containsMouse
-                           ? Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.16)
-                           : Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.08)
-
-                    StyledText {
-                        anchors.centerIn: parent
-                        text: "Use these coordinates"
-                        font.pixelSize: Theme.fontSizeSmall
-                        font.weight: Font.Medium
-                        color: Theme.surfaceText
-                    }
-
-                    MouseArea {
-                        id: applyArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: root.applyCandidate()
-                    }
-                }
-
-                StyledText {
-                    width: parent.width
-                    text: "The one time this plugin uses the network. It locates your public IP, which often resolves to your provider's exchange rather than your town — tested here it landed 163 km away, enough to move every prayer by several minutes. It proposes; you decide. A VPN will report wherever it exits."
+                    text: "Searches a place directory by name — it never looks at your IP, so a VPN makes no difference. Matches are listed largest first; pick the right one and the coordinates above are filled in."
                     font.pixelSize: Theme.fontSizeSmall
                     color: Theme.surfaceVariantText
                     wrapMode: Text.WordWrap
@@ -435,7 +367,7 @@ PluginSettings {
             }
 
             StyledText {
-                text: "Prayer times are computed locally from the sun's position — no network requests, no rate limits, and your coordinates never leave this machine. The one exception is the Detect button above, which asks a lookup service where your IP is, only when pressed, and which proposes rather than applies.\n\n• Each prayer as a window: when it opens, when it closes, how long is left\n• Islamic midnight and the Hijri date\n• 22 calculation methods, both Asr schools, high-latitude handling\n\nForked from the Prayer Times plugin by muadz (github.com/muadzmo/prayertimes). The local computation, prayer windows and interface are this fork's own work."
+                text: "Prayer times are computed locally from the sun's position — no network requests, no rate limits, and your coordinates never leave this machine. The one exception is the place search above, which asks a directory for a town's coordinates when you search — by name, never by IP.\n\n• Each prayer as a window: when it opens, when it closes, how long is left\n• Islamic midnight and the Hijri date\n• 22 calculation methods, both Asr schools, high-latitude handling\n\nForked from the Prayer Times plugin by muadz (github.com/muadzmo/prayertimes). The local computation, prayer windows and interface are this fork's own work."
                 font.pixelSize: Theme.fontSizeSmall
                 color: Theme.surfaceVariantText
                 wrapMode: Text.WordWrap
