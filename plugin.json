@@ -11,6 +11,7 @@
     "settings_read",
     "settings_write",
     "state_read",
-    "state_write"
+    "state_write",
+    "network"
   ]
 }
