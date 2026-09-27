@@ -10,8 +10,6 @@
   "permissions": [
     "settings_read",
     "settings_write",
-    "state_read",
-    "state_write",
     "network"
   ]
 }
