@@ -1272,34 +1272,39 @@ PluginComponent {
                     height: 22
                     visible: root.located
 
-                    Row {
-                        id: placeRow
+                    DankIcon {
+                        id: placePin
                         anchors.left: parent.left
                         anchors.verticalCenter: parent.verticalCenter
-                        spacing: Theme.spacingXS
+                        name: "location_on"
+                        size: Theme.fontSizeSmall + 3
+                        color: Theme.surfaceVariantText
+                        opacity: 0.7
+                    }
 
-                        DankIcon {
-                            name: "location_on"
-                            size: Theme.fontSizeSmall + 3
-                            color: Theme.surfaceVariantText
-                            opacity: 0.7
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
-
-                        StyledText {
-                            text: root.placeLabel !== "" ? root.placeLabel : root.coordText()
-                            font.pixelSize: Theme.fontSizeSmall
-                            color: Theme.surfaceVariantText
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
+                    // Anchored between the pin and the coordinates rather than
+                    // laid out in a row, so a long name elides instead of
+                    // running underneath the numbers on the right.
+                    StyledText {
+                        anchors.left: placePin.right
+                        anchors.leftMargin: Theme.spacingXS
+                        anchors.right: placeCoords.left
+                        anchors.rightMargin: Theme.spacingS
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: root.placeLabel !== "" ? root.placeLabel : root.coordText()
+                        font.pixelSize: Theme.fontSizeSmall
+                        color: Theme.surfaceVariantText
+                        elide: Text.ElideRight
                     }
 
                     // The numbers stay on show beside a name: the name is the
                     // readable label, the coordinates are what is actually used.
                     StyledText {
+                        id: placeCoords
                         anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
                         visible: root.placeLabel !== ""
+                        width: visible ? implicitWidth : 0
                         text: root.coordText()
                         font.pixelSize: Theme.fontSizeSmall - 1
                         color: Theme.surfaceVariantText
