@@ -1143,13 +1143,26 @@ PluginComponent {
                         { label: "Asr",              start: root.todayTimes.asr,      end: root.todayTimes.maghrib, marker: false },
                         { label: "Maghrib",          start: root.todayTimes.maghrib,  end: root.todayTimes.isha,    marker: false },
                         { label: "Isha",             start: root.todayTimes.isha,     end: root.todayTimes.midnight, marker: false },
-                        { label: "Islamic midnight", start: root.todayTimes.midnight, end: null,                    marker: true  }
+                        // Tonight's midpoint falls after 00:00, so it belongs to
+                        // tomorrow's clock rather than today's.
+                        { label: "Islamic midnight", start: root.todayTimes.midnight, end: null,                    marker: true, nextDay: true }
                     ] : []
 
                     delegate: Item {
                         required property var modelData
                         width: content.width
                         height: modelData.marker ? 24 : 30
+
+                        // Already over. Anything landing after 00:00 -- Isha's
+                        // close, and Islamic midnight itself -- belongs to
+                        // tomorrow's clock and is placed there before comparing.
+                        readonly property bool isPast: {
+                            var e = modelData.end !== null ? modelData.end : modelData.start
+                            if (modelData.nextDay === true
+                                    || (modelData.end !== null && e < modelData.start))
+                                e += 24
+                            return root.nowHours() > e
+                        }
 
                         readonly property bool isNext: !modelData.marker && modelData.label === root.nextName
                         readonly property bool isCurr: !modelData.marker
@@ -1179,6 +1192,7 @@ PluginComponent {
                             height: width
                             radius: width / 2
                             color: root.prayerColor(modelData.label)
+                            opacity: parent.isPast ? 0.4 : 1
                         }
 
                         Row {
@@ -1193,7 +1207,7 @@ PluginComponent {
                                 font.weight: isCurr ? Font.Bold : Font.Normal
                                 font.italic: modelData.marker
                                 color: Theme.surfaceText
-                                opacity: modelData.marker ? 0.75 : 1
+                                opacity: isPast ? 0.42 : (modelData.marker ? 0.75 : 1)
                                 anchors.verticalCenter: parent.verticalCenter
                             }
 
@@ -1219,6 +1233,7 @@ PluginComponent {
                             font.pixelSize: Theme.fontSizeSmall
                             font.weight: isCurr ? Font.Bold : Font.Normal
                             color: Theme.surfaceText
+                            opacity: isPast ? 0.42 : 1
                         }
 
                         StyledText {
@@ -1231,7 +1246,7 @@ PluginComponent {
                             font.pixelSize: Theme.fontSizeSmall
                             font.weight: isCurr ? Font.Bold : Font.Normal
                             color: Theme.surfaceText
-                            opacity: 0.85
+                            opacity: isPast ? 0.36 : 0.85
                         }
 
                         // Sunrise and Islamic midnight open and close nothing, so
@@ -1244,7 +1259,7 @@ PluginComponent {
                             text: root.formatTime(root.hhmm(modelData.start))
                             font.pixelSize: Theme.fontSizeSmall
                             color: Theme.surfaceText
-                            opacity: 0.75
+                            opacity: isPast ? 0.36 : 0.75
                         }
                     }
                 }
