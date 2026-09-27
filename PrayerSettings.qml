@@ -192,15 +192,15 @@ PluginSettings {
             StringSetting {
                 settingKey: "lat"
                 label: "Latitude"
-                description: "Example: -6.2000"
-                defaultValue: "0.0"
+                description: "Example: 32.6099"
+                defaultValue: ""
             }
 
             StringSetting {
                 settingKey: "lon"
                 label: "Longitude"
-                description: "Example: 106.8166"
-                defaultValue: "0.0"
+                description: "Example: -85.4808"
+                defaultValue: ""
             }
 
             Column {

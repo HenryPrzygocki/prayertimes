@@ -14,8 +14,9 @@ PluginComponent {
     // === Settings, bound directly to pluginData ===
     // parseFloat tolerates the stray whitespace that creeps into hand-entered
     // coordinates; the old code interpolated them straight into a URL.
-    property real lat: parseFloat(String(pluginData.lat || "-6.2088").trim())
-    property real lon: parseFloat(String(pluginData.lon || "106.8456").trim())
+    property real lat: parseFloat(String(pluginData.lat || "").trim())
+    property real lon: parseFloat(String(pluginData.lon || "").trim())
+    readonly property bool located: !isNaN(lat) && !isNaN(lon)
     property string method: pluginData.method || "2"
     property string school: pluginData.school || "0"
     property string highLat: pluginData.highLat || "angle"
@@ -73,9 +74,20 @@ PluginComponent {
     // Prayer times are a deterministic function of the date, so this only needs
     // to run when the date changes -- not on a polling interval.
     function recompute() {
-        if (isNaN(root.lat) || isNaN(root.lon)) {
+        if (!root.located) {
+            // Clear everything derived. Leaving yesterday's times, the sampled
+            // arc and the Hijri date behind drew a live sky for wherever the
+            // coordinates used to point, under a card showing nothing.
+            root.yesterdayTimes = null
             root.todayTimes = null
             root.tomorrowTimes = null
+            root.sunSamples = []
+            root.prayerAlt = ({})
+            root.hijriText = ""
+            root.moonName = ""
+            root.nextName = ""
+            root.nextAt = 0
+            root.nextTotalSeconds = 0
             return
         }
         var now = new Date()
@@ -728,8 +740,8 @@ PluginComponent {
                 anchors.horizontalCenter: parent.horizontalCenter
 
                 DankIcon {
-                    name: root.getPrayerIcon(root.nextName)
-                    fill: root.getPrayerFill(root.nextName)
+                    name: root.located ? root.getPrayerIcon(root.nextName) : "location_off"
+                    fill: root.located ? root.getPrayerFill(root.nextName) : 0.0
                     size: Theme.iconSize - 6
                     color: root.nextImminent ? Theme.error : Theme.surfaceText
                     anchors.verticalCenter: parent.verticalCenter
@@ -876,6 +888,52 @@ PluginComponent {
                     }
                 }
 
+                // --- Nothing to compute from ---
+                Rectangle {
+                    width: content.width
+                    height: emptyCol.implicitHeight + Theme.spacingL * 2
+                    radius: 12
+                    visible: !root.located
+                    color: Theme.surfaceContainerHigh
+
+                    Column {
+                        id: emptyCol
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.leftMargin: Theme.spacingM
+                        anchors.rightMargin: Theme.spacingM
+                        spacing: Theme.spacingXS
+
+                        Row {
+                            spacing: Theme.spacingS
+
+                            DankIcon {
+                                name: "location_off"
+                                size: Theme.iconSize - 4
+                                color: Theme.surfaceVariantText
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+
+                            StyledText {
+                                text: "No location set"
+                                font.pixelSize: Theme.fontSizeMedium
+                                font.weight: Font.Bold
+                                color: Theme.surfaceText
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                        }
+
+                        StyledText {
+                            width: parent.width
+                            text: "Prayer times are computed from your coordinates. Set them in plugin settings, or search there for your town."
+                            font.pixelSize: Theme.fontSizeSmall
+                            color: Theme.surfaceVariantText
+                            wrapMode: Text.WordWrap
+                        }
+                    }
+                }
+
                 // --- What is next ---
                 // The panel's subject line. The first question anyone opens this
                 // for is which prayer is coming and when, so it is answered first,
@@ -884,6 +942,7 @@ PluginComponent {
                     width: content.width
                     height: nextCol.implicitHeight + Theme.spacingM * 2
                     radius: 12
+                    visible: root.located
                     color: Theme.surfaceContainerHigh
 
                     Column {
@@ -950,6 +1009,7 @@ PluginComponent {
                 Column {
                     width: content.width
                     spacing: 4
+                    visible: root.located
 
                     Item {
                         width: parent.width
@@ -1025,6 +1085,7 @@ PluginComponent {
                 Rectangle {
                     width: content.width
                     height: 1
+                    visible: root.located
                     color: Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.08)
                 }
 
@@ -1032,6 +1093,7 @@ PluginComponent {
                 Item {
                     width: content.width
                     height: 16
+                    visible: root.located
 
                     StyledText {
                         anchors.right: parent.right
