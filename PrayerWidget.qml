@@ -127,12 +127,12 @@ PluginComponent {
         root.lastComputed = Qt.formatDate(now, "yyyy-MM-dd")
         updateCountdown()
 
-        // The arc is the one part of this that can be done without, so it goes
-        // last and cannot take the rest down with it. A QML script imported with
-        // .pragma library is cached engine-wide by URL, so after this file gains
-        // a function the running shell keeps the older copy until it restarts --
-        // and a throw here used to skip the date, the countdown and the handover
-        // line, blanking most of the panel with nothing in the log to say why.
+        // The arc and the moon are the parts that can be done without, so they
+        // go last and behind a guard: whatever they may throw, the times, the
+        // date and the countdown above are already set. The caching problem that
+        // originally motivated this is gone -- the calculation was moved into
+        // this file to end it -- but the ordering is worth keeping on its own
+        // merits, since an ornament should not be able to blank the panel.
         try {
             root.moonFraction = moonPhase(now.getFullYear(), now.getMonth() + 1, now.getDate())
             root.moonName = moonPhaseName(root.moonFraction)

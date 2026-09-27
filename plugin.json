@@ -2,7 +2,7 @@
   "id": "prayerTimes",
   "name": "Prayer Times",
   "description": "Islamic prayer times, computed locally",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "author": "Henry Przygocki",
   "icon": "mosque",
   "component": "./PrayerWidget.qml",
