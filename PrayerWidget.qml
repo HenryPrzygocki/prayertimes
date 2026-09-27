@@ -292,12 +292,12 @@ PluginComponent {
 
     readonly property int spanElapsedSec: {
         var w = activeSpan
-        return w ? Math.max(0, Math.round((nowHours() - w.start) * 3600)) : 0
+        return w ? Math.max(0, -secondsUntil(w.start)) : 0
     }
 
     readonly property int spanRemainingSec: {
         var w = activeSpan
-        return w ? Math.max(0, Math.round((w.end - nowHours()) * 3600)) : 0
+        return w ? Math.max(0, secondsUntil(w.end)) : 0
     }
 
     readonly property real spanProgress: {
@@ -310,6 +310,28 @@ PluginComponent {
 
 
 
+
+    // A point on today's wall-clock timeline, as a real instant. Values at or
+    // past 24 belong to tomorrow, below zero to yesterday.
+    function instantAt(at) {
+        var n = clock.date
+        var wall = at, dayDelta = 0
+        while (wall >= 24) { wall -= 24; dayDelta += 1 }
+        while (wall < 0)   { wall += 24; dayDelta -= 1 }
+        var h = Math.floor(wall)
+        var mi = Math.floor((wall - h) * 60)
+        var se = Math.round((((wall - h) * 60) - mi) * 60)
+        return new Date(n.getFullYear(), n.getMonth(), n.getDate() + dayDelta, h, mi, se)
+    }
+
+    // Durations are measured between real instants, never by subtracting
+    // wall-clock hours. A day containing a daylight-saving change is 23 or 25
+    // hours long and the hours inside it are not uniform, so the difference of
+    // two clock readings that straddle the change is not the time between them:
+    // the overnight countdown came out an hour wrong on both transition days.
+    function secondsUntil(at) {
+        return Math.round((instantAt(at).getTime() - clock.date.getTime()) / 1000)
+    }
 
     function nowHours() {
         var d = clock.date
@@ -333,7 +355,7 @@ PluginComponent {
         root.nextName = next.name
         root.nextAt = next.at
 
-        var diff = Math.round((next.at - h) * 3600)
+        var diff = secondsUntil(next.at)
         if (diff < 0) diff += 86400
         root.nextTotalSeconds = diff
 
