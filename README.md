@@ -10,10 +10,10 @@ prayer times, computed locally from the sun's position.
 - **No network.** Prayer times are a deterministic function of date, latitude and longitude, so
   they are calculated on this machine. Works offline, cannot be rate limited, and your
   coordinates are never sent anywhere. The sole exception is the place search in settings, which
-  asks a directory for a named town's coordinates when you search for one. It looks up a name,
-  never an IP, so it is unaffected by a VPN — unlike IP geolocation, which resolves to the
-  provider's exchange (163 km out when tested here, enough to move every prayer by several
-  minutes) and is not used.
+  asks a directory for a named town's coordinates when you search for one, and can name the
+  coordinates you already have. Both look up a place, never an IP, so they are unaffected by a
+  VPN — unlike IP geolocation, which resolves to the provider's exchange (163 km out when tested
+  here, enough to move every prayer by several minutes) and is not used.
 - **Prayers as windows, not instants.** Each prayer shows when it opens, when it closes, and how
   much of it is left. Most close as the next one opens; two do not. Fajr closes at sunrise rather
   than running on to Dhuhr, and Isha closes at Islamic midnight — the middle of the night — rather

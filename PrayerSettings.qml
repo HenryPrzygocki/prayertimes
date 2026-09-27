@@ -75,6 +75,55 @@ PluginSettings {
         xhr.send()
     }
 
+    // Coordinates typed by hand, or set before the name was ever recorded, have
+    // no label for the widget to show. This asks what is at them.
+    property bool naming: false
+    property real nameStartedAt: 0
+
+    function nameCurrentCoordinates() {
+        var lat = parseFloat(String(root.loadValue("lat", "")).trim())
+        var lon = parseFloat(String(root.loadValue("lon", "")).trim())
+        if (isNaN(lat) || isNaN(lon)) {
+            root.searchStatus = "Set coordinates first."
+            return
+        }
+        var now = Date.now()
+        if (root.naming && now - root.nameStartedAt < 15000)
+            return
+        root.naming = true
+        root.nameStartedAt = now
+        root.searchStatus = ""
+
+        var xhr = new XMLHttpRequest()
+        xhr.onreadystatechange = function () {
+            if (xhr.readyState !== XMLHttpRequest.DONE)
+                return
+            root.naming = false
+            if (xhr.status !== 200) {
+                root.searchStatus = "Could not reach the place directory."
+                return
+            }
+            try {
+                var j = JSON.parse(xhr.responseText)
+                var town = j.city || j.locality || ""
+                var label = root.placeName([town, j.principalSubdivision])
+                if (!label) {
+                    root.searchStatus = "Nothing is named at those coordinates."
+                    return
+                }
+                root.saveValue("placeLabel", label)
+                root.saveValue("placeLat", lat.toFixed(4))
+                root.saveValue("placeLon", lon.toFixed(4))
+                root.searchStatus = "Named " + label
+            } catch (e) {
+                root.searchStatus = "Could not read the response."
+            }
+        }
+        xhr.open("GET", "https://api.bigdatacloud.net/data/reverse-geocode-client"
+                      + "?localityLanguage=en&latitude=" + lat + "&longitude=" + lon)
+        xhr.send()
+    }
+
     function applyPlace(place) {
         // Four decimals is about eleven metres, far finer than any prayer time
         // resolves to.
@@ -276,6 +325,31 @@ PluginSettings {
                             cursorShape: Qt.PointingHandCursor
                             onClicked: root.applyPlace(modelData)
                         }
+                    }
+                }
+
+                StyledRect {
+                    width: parent.width
+                    height: 34
+                    radius: Theme.cornerRadius
+                    color: nameArea.containsMouse
+                           ? Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.16)
+                           : Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.08)
+
+                    StyledText {
+                        anchors.centerIn: parent
+                        text: root.naming ? "Naming…" : "Name the coordinates above"
+                        font.pixelSize: Theme.fontSizeSmall
+                        font.weight: Font.Medium
+                        color: Theme.surfaceText
+                    }
+
+                    MouseArea {
+                        id: nameArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.nameCurrentCoordinates()
                     }
                 }
 
