@@ -17,6 +17,29 @@ PluginComponent {
     property real lat: parseFloat(String(pluginData.lat || "").trim())
     property real lon: parseFloat(String(pluginData.lon || "").trim())
     readonly property bool located: !isNaN(lat) && !isNaN(lon)
+
+    // The name of the place the coordinates came from, shown only while it still
+    // describes them. Editing latitude or longitude by hand would otherwise
+    // leave the old name sitting under the new numbers, and a label that quietly
+    // disagrees with what it labels is worse than no label at all.
+    readonly property string placeLabel: {
+        var name = pluginData.placeLabel || ""
+        if (!name || !located)
+            return ""
+        var pLat = parseFloat(String(pluginData.placeLat || "").trim())
+        var pLon = parseFloat(String(pluginData.placeLon || "").trim())
+        if (isNaN(pLat) || isNaN(pLon))
+            return ""
+        // A hundred metres of slack, well inside the rounding already applied.
+        return (Math.abs(pLat - lat) < 0.001 && Math.abs(pLon - lon) < 0.001) ? name : ""
+    }
+
+    function coordText() {
+        if (!located)
+            return ""
+        return Math.abs(lat).toFixed(2) + "\u00b0" + (lat >= 0 ? "N" : "S") + "   "
+             + Math.abs(lon).toFixed(2) + "\u00b0" + (lon >= 0 ? "E" : "W")
+    }
     property string method: pluginData.method || "2"
     property string school: pluginData.school || "0"
     property string highLat: pluginData.highLat || "angle"
@@ -1228,6 +1251,49 @@ PluginComponent {
                             color: Theme.surfaceText
                             opacity: 0.75
                         }
+                    }
+                }
+
+                // --- What all of this is computed for ---
+                // A footer rather than a header: it is checked occasionally, not
+                // watched, so it should not compete with the countdown.
+                Item {
+                    width: content.width
+                    height: 22
+                    visible: root.located
+
+                    Row {
+                        id: placeRow
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: Theme.spacingXS
+
+                        DankIcon {
+                            name: "location_on"
+                            size: Theme.fontSizeSmall + 3
+                            color: Theme.surfaceVariantText
+                            opacity: 0.7
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+
+                        StyledText {
+                            text: root.placeLabel !== "" ? root.placeLabel : root.coordText()
+                            font.pixelSize: Theme.fontSizeSmall
+                            color: Theme.surfaceVariantText
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                    }
+
+                    // The numbers stay on show beside a name: the name is the
+                    // readable label, the coordinates are what is actually used.
+                    StyledText {
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        visible: root.placeLabel !== ""
+                        text: root.coordText()
+                        font.pixelSize: Theme.fontSizeSmall - 1
+                        color: Theme.surfaceVariantText
+                        opacity: 0.65
                     }
                 }
             }

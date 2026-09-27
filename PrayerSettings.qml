@@ -80,6 +80,11 @@ PluginSettings {
         // resolves to.
         root.saveValue("lat", place.lat.toFixed(4))
         root.saveValue("lon", place.lon.toFixed(4))
+        // The name is kept beside the coordinates it describes, so the widget can
+        // tell whether it still describes them -- see placeLabel there.
+        root.saveValue("placeLabel", place.label)
+        root.saveValue("placeLat", place.lat.toFixed(4))
+        root.saveValue("placeLon", place.lon.toFixed(4))
         root.placeResults = []
         root.searchStatus = "Set to " + place.label + "  \u00b7  "
                           + place.lat.toFixed(4) + ", " + place.lon.toFixed(4)
