@@ -59,6 +59,9 @@ PluginComponent {
     property var sunSamples: []
     property real moonFraction: 0
     property string moonName: ""
+    property real moonLit: 0
+    property bool moonWaxes: true
+    property bool moonTurning: false
     property var prayerAlt: ({})
     property string hijriText: ""
     property string lastComputed: ""
@@ -133,6 +136,9 @@ PluginComponent {
         try {
             root.moonFraction = moonPhase(now.getFullYear(), now.getMonth() + 1, now.getDate())
             root.moonName = moonPhaseName(root.moonFraction)
+            root.moonLit = moonIllumination(root.moonFraction)
+            root.moonWaxes = moonWaxing(root.moonFraction)
+            root.moonTurning = moonAtTurningPoint(root.moonFraction)
 
             // A full turn of the sky. The ellipse closes, so the night needs no
             // cropping and the sun never leaves the frame.
@@ -855,15 +861,19 @@ PluginComponent {
                         }
                     }
 
+                    // How full, and which way it is going. No arrow at new or
+                    // full: there the direction is turning over rather than
+                    // pointing anywhere, so an arrow would assert something false.
                     StyledText {
                         anchors.left: hijriLabel.right
                         anchors.leftMargin: Theme.spacingS
                         anchors.baseline: hijriLabel.top
                         anchors.baselineOffset: hijriLabel.height / 2 + 4
-                        text: root.moonName
-                        font.pixelSize: Theme.fontSizeSmall - 2
+                        text: Math.round(root.moonLit * 100) + "%"
+                              + (root.moonTurning ? "" : (root.moonWaxes ? " \u2191" : " \u2193"))
+                        font.pixelSize: Theme.fontSizeSmall - 1
                         color: Theme.surfaceVariantText
-                        opacity: 0.6
+                        opacity: 0.75
                         visible: width + hijriLabel.width + 40 < parent.width
                     }
 
@@ -1542,7 +1552,22 @@ PluginComponent {
     }
 
 
-    function moonPhaseName(phase) {
+    // Fraction of the disc lit, 0 at new and 1 at full.
+function moonIllumination(phase) {
+    return (1 - Math.cos(2 * Math.PI * phase)) / 2
+}
+
+// True while the lit fraction is growing. Meaningless at the two turning points,
+// where the direction is changing rather than pointing anywhere.
+function moonWaxing(phase) {
+    return phase < 0.5
+}
+
+function moonAtTurningPoint(phase) {
+    return phase < 0.02 || phase > 0.98 || (phase > 0.48 && phase < 0.52)
+}
+
+function moonPhaseName(phase) {
         if (phase < 0.02 || phase > 0.98) return "New moon"
         if (phase < 0.23) return "Waxing crescent"
         if (phase < 0.27) return "First quarter"
