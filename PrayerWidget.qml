@@ -63,7 +63,6 @@ PluginComponent {
     property string hijriText: ""
     property string lastComputed: ""
 
-    property string currName: ""
     property string nextName: ""
     property real nextAt: 0            // fractional hours, may exceed 24 (tomorrow)
     property int nextTotalSeconds: 0
@@ -72,8 +71,6 @@ PluginComponent {
     readonly property bool isUrgent: currentWindow !== null
                                      && spanRemainingSec > 0 && spanRemainingSec <= 900
     readonly property color accentColor: Theme.primary
-    readonly property color accentBg: Qt.rgba(accentColor.r, accentColor.g, accentColor.b, 0.18)
-    readonly property color subtleBg: Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.05)
 
 
     // === Computation ===
@@ -230,7 +227,6 @@ PluginComponent {
                                 nowHours(), optionsFor(noon))
     }
 
-    readonly property real altitudeNow: sunNow ? sunNow.alt : 0
 
     // Progress across the interval between one prayer and the next, which is
     // what the bar's rule sits under.
@@ -382,11 +378,8 @@ PluginComponent {
         for (var i = 0; i < sched.length; i++)
             if (sched[i].at > h) { idx = i; break }
 
-        // Before today's Fajr we are still inside last night's Isha.
-        var curr = idx <= 0 ? "Isha" : sched[idx - 1].name
         var next = idx < 0 ? sched[sched.length - 1] : sched[idx]
 
-        root.currName = curr
         root.nextName = next.name
         root.nextAt = next.at
 
@@ -413,14 +406,6 @@ PluginComponent {
         return (hours < 10 ? "0" : "") + hours + ":" + parts[1] + " " + ampm
     }
 
-    function formatDuration(totalSeconds) {
-        var s = Math.max(0, totalSeconds)
-        var h = Math.floor(s / 3600)
-        var m = Math.floor((s % 3600) / 60)
-        if (h > 0) return h + "h " + m + "m"
-        if (m > 0) return m + "m"
-        return "under a minute"
-    }
 
     // "02:01" reads as a clock time, which is exactly what it is not. Units
     // remove the ambiguity at a glance and cost two characters.
@@ -1577,10 +1562,6 @@ PluginComponent {
         return p < 0 ? p + 1 : p
     }
 
-    // Fraction of the disc lit, 0 to 1.
-    function moonIllumination(phase) {
-        return (1 - Math.cos(2 * Math.PI * phase)) / 2
-    }
 
     function moonPhaseName(phase) {
         if (phase < 0.02 || phase > 0.98) return "New moon"
@@ -1637,8 +1618,5 @@ PluginComponent {
         return (h < 10 ? "0" : "") + h + ":" + (mn < 10 ? "0" : "") + mn
     }
 
-    function toSeconds(hours) {
-        return Math.round(fixHour(hours) * 3600)
-    }
     // ===== END CALC =====
 }

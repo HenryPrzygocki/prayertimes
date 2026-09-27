@@ -26,9 +26,9 @@ export function loadCalc(qmlPath = path.join(here, "..", "PrayerWidget.qml")) {
   if (stray) throw new Error("QML leaked into the calc region: " + stray.trim())
 
   const exports = {}
-  const names = ["computeDay", "toHHMM", "toSeconds", "hijriDate", "formatHijri",
-                 "solarAltitude", "sunSkyPoint", "moonPhase", "moonIllumination",
-                 "moonPhaseName", "methodTable", "sunPosition", "julianDay"]
+  const names = ["computeDay", "toHHMM", "hijriDate", "formatHijri",
+                 "solarAltitude", "sunSkyPoint", "moonPhase", "moonPhaseName",
+                 "methodTable", "sunPosition", "julianDay"]
   new Function("e", body + "\n;Object.assign(e,{" + names.join(",") + "})")(exports)
   return exports
 }
