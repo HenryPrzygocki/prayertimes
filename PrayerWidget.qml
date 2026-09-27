@@ -170,7 +170,7 @@ PluginComponent {
         var keys = { Fajr: "fajr", Sunrise: "sunrise", Dhuhr: "dhuhr", Asr: "asr",
                      Maghrib: "maghrib", Isha: "isha", "Islamic midnight": "midnight" }
         for (var name in keys)
-            out[name] = solarAltitude(y, m, d, t[keys[name]], o)
+            out[name] = sunSkyPoint(y, m, d, t[keys[name]], o).alt
         return out
     }
 
@@ -1506,27 +1506,6 @@ PluginComponent {
             times.isha = times.sunset + portion(m.isha)
     }
 
-    // === Sun position through the day ===
-    // The prayer times are all instants where the sun crosses a given altitude, so
-    // the altitude curve itself is the thing they are cut from. Exposing it lets the
-    // interface draw the actual arc the sun walks rather than a stylised one.
-    //
-    // `hourLocal` is local civil time. Returns degrees above the horizon, negative
-    // when the sun is down.
-    function solarAltitude(year, month, day, hourLocal, opts) {
-        var lat = opts.lat
-        var lon = opts.lon
-        var jd = julianDay(year, month, day) - lon / (15 * 24)
-        var sp = sunPosition(jd + hourLocal / 24)
-
-        // Undo the same shift computeDay applies to get from the local meridian's
-        // mean solar frame to civil time, then take the hour angle from solar noon.
-        var meanSolar = hourLocal - opts.tzOffset + lon / 15
-        var H = 15 * (meanSolar - (12 - sp.eqt))
-
-        return dasin(dsin(lat) * dsin(sp.decl)
-                   + dcos(lat) * dcos(sp.decl) * dcos(H))
-    }
 
     // The sun's position projected onto the sky as an observer facing the equator
     // sees it: x runs east (negative, on the left) to west, z is height, and equals
