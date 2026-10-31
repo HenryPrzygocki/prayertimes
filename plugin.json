@@ -11,6 +11,7 @@
   "permissions": [
     "settings_read",
     "settings_write",
+    "process",
     "network"
   ]
 }

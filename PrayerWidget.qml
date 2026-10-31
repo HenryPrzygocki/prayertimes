@@ -100,6 +100,7 @@ PluginComponent {
         property real zoneOffset: NaN
         property real zoneCheckedAt: 0
         property bool zoneLoading: false
+        property string zoneName: ""
 
         // Out of range is treated as unset: a latitude of 95 is a typo, and
         // computing from it produced NaN times under a panel that looked live.
@@ -159,8 +160,8 @@ PluginComponent {
         }
 
         // A new place's clock is unknown until asked, not the old one's.
-        onLatChanged: { zoneOffset = NaN; refresh() }
-        onLonChanged: { zoneOffset = NaN; refresh() }
+        onLatChanged: { zoneName = ""; zoneOffset = NaN; refresh() }
+        onLonChanged: { zoneName = ""; zoneOffset = NaN; refresh() }
         onMethodChanged: refresh()
         Component.onCompleted: refresh()
 
@@ -210,12 +211,20 @@ PluginComponent {
             computeDays(dates, offsets)
         }
 
-        // QML's Date knows only the system's zone, so the offset there is
-        // asked of open-meteo, which answers for a bare pair of coordinates
-        // ("timezone=auto") with the zone's offset in force right now. It is
-        // re-asked hourly, which picks up a daylight-saving change there within
-        // the hour, and retries the same way after a failure. This is the
-        // widget's only network request, and only for the second location.
+        // QML's Date knows only the system's zone, so the clock there takes two
+        // steps, split by how often each answer changes.
+        //
+        // Which zone a point is in is geography, and is asked of open-meteo
+        // once per place ("timezone=auto" answers for bare coordinates).
+        //
+        // What that zone's offset is, is politics: Morocco left +01 for +00 in
+        // September 2026, and open-meteo's server still said +01 a month on.
+        // So the offset is never taken from the network. It is read from the
+        // system's own tzdata through date(1) -- the rules the package manager
+        // keeps current -- hourly, which also catches a daylight-saving change
+        // there within the hour. The zone name is passed as an argument, never
+        // spliced into the script, and must be a real TZif file, since glibc
+        // reads an unknown TZ as UTC without a word.
         function lookupOffset() {
             if (!showsOwnClock || !located) {
                 zoneOffset = NaN
@@ -223,8 +232,35 @@ PluginComponent {
             }
             if (zoneLoading)
                 return
-            zoneLoading = true
             zoneCheckedAt = now
+            if (zoneName === "") {
+                findZoneName()
+                return
+            }
+            var z = zoneName
+            var script = 'z=$0\n'
+                + 'case $z in ""|/*|*..*) exit 2;; esac\n'
+                + 'f="/usr/share/zoneinfo/$z"\n'
+                + '[ -f "$f" ] && [ "$(head -c 4 "$f")" = TZif ] || exit 2\n'
+                + 'TZ="$z" date +%z\n'
+            zoneLoading = true
+            Proc.runCommand("prayerTimes.zone", ["sh", "-c", script, z], function (out, code) {
+                zoneLoading = false
+                if (z !== zoneName)
+                    return   // the place moved while this ran
+                var o = String(out || "").trim()
+                if (code === 0 && /^[+-]\d{4}$/.test(o)) {
+                    zoneOffset = (o[0] === "-" ? -1 : 1) * (Number(o.slice(1, 3)) + Number(o.slice(3, 5)) / 60)
+                    return
+                }
+                console.warn("prayerTimes: tzdata has no zone", z)
+                zoneName = ""   // ask again which zone this is, in five minutes
+                zoneCheckedAt = now - 3300000
+            }, 0)
+        }
+
+        function findZoneName() {
+            zoneLoading = true
             var key = lat.toFixed(4) + "," + lon.toFixed(4)
             var xhr = new XMLHttpRequest()
             xhr.onreadystatechange = function () {
@@ -235,19 +271,20 @@ PluginComponent {
                     lookupOffset()   // the place moved while this was out
                     return
                 }
-                var secs = NaN
+                var tz = ""
                 try {
                     if (xhr.status === 200)
-                        secs = Number(JSON.parse(xhr.responseText).utc_offset_seconds)
+                        tz = String(JSON.parse(xhr.responseText).timezone || "")
                 } catch (e) {}
-                if (isFinite(secs)) {
-                    zoneOffset = secs / 3600
+                if (tz !== "" && tz !== "GMT") {
+                    zoneName = tz
+                    lookupOffset()
                     return
                 }
-                // On failure a known offset is kept -- an hour-old answer beats
-                // none -- and the next try comes in five minutes, not an hour.
+                // A known offset is kept, and the next try comes in five
+                // minutes rather than an hour.
                 zoneCheckedAt = now - 3300000
-                console.warn("prayerTimes: no UTC offset for", key, "- status", xhr.status)
+                console.warn("prayerTimes: no time zone found for", key, "- status", xhr.status)
             }
             xhr.open("GET", "https://api.open-meteo.com/v1/forecast?forecast_days=1&timezone=auto"
                           + "&latitude=" + lat.toFixed(4) + "&longitude=" + lon.toFixed(4))

@@ -12,8 +12,8 @@ prayer times, computed locally from the sun's position.
   coordinates are never sent anywhere. The sole exception is the place search in settings, which
   asks a directory for a named town's coordinates when you search for one, and can name the
   coordinates you already have (which sends them to a reverse geocoder, and only when you press the
-  button). If you set a second location, the widget asks open-meteo for the UTC offset at its
-  coordinates once an hour; the main location never leaves the machine. Both look up a place, never an IP, so they are unaffected by a
+  button). If you set a second location, the widget asks open-meteo once which time zone it is
+  in; the main location never leaves the machine. Both look up a place, never an IP, so they are unaffected by a
   VPN — unlike IP geolocation, which resolves to the provider's exchange (163 km out when tested
   here, enough to move every prayer by several minutes) and is not used.
 - **Prayers as windows, not instants.** Each prayer shows when it opens, when it closes, and how
@@ -23,8 +23,10 @@ prayer times, computed locally from the sun's position.
   outright rather than going blank.
 - **A second location**, on its own tab in the popout: somewhere else to keep an eye on, worked
   out exactly as the main one is, with every time on your system's clock, and each also shown,
-  smaller, on the clock there, whose UTC offset the widget asks open-meteo for by coordinates,
-  hourly. The bar keeps following the main location.
+  smaller, on the clock there. The widget asks open-meteo which zone the place is in, once; the
+  offset comes from the system's own tzdata, so a change in the rules there arrives with the next
+  tzdata update rather than whenever a web service catches up. The bar keeps following the main
+  location.
 - **Hijri date**, with an adjustment for calendars set by local moonsighting.
 - 22 calculation methods, both Asr schools, angle-based high-latitude handling, and a polar clamp.
 
@@ -48,7 +50,8 @@ node timeline.mjs     # windows and countdowns across DST changes and time zones
 DankMaterialShell (Dux Shell) ≥ 2.0. Version 3 of this plugin uses the `qs.DCommon.Widgets` set
 that 2.0 introduced; for an older shell, check out the `v2.1.0` tag.
 
-No external tools.
+The `process` permission is used only to read a second location's UTC offset from the system's
+tzdata with `date(1)`. No other external tools.
 
 ## Installation
 
