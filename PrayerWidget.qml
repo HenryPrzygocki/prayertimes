@@ -59,9 +59,10 @@ PluginComponent {
     readonly property string secLabel: labelFor(pluginData.secLabel, pluginData.secPlaceLat,
                                                 pluginData.secPlaceLon, secLat, secLon)
 
-    // Which place the popout shows. Kept here rather than in the popout, which
-    // is rebuilt each time it opens.
+    // Which place the popout shows. It always opens on the main location: the
+    // second is somewhere to glance at, not somewhere to stay.
     property int popoutTab: 0
+    onInteractionActiveChanged: if (interactionActive) popoutTab = 0
     readonly property bool hasSecond: there.located
     popoutWidth: hasSecond ? 440 : 400
 
