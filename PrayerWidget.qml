@@ -444,13 +444,13 @@ PluginComponent {
         label: root.secLabel
     }
 
-    // How far a place's clock is from ours, in words.
+    // How far a place's clock is from ours, in a few words.
     function offsetText(place) {
         var d = place.zoneOffset + new Date(nowMs).getTimezoneOffset() / 60
-        if (Math.abs(d) < 1 / 120) return "same time as here"
+        if (Math.abs(d) < 1 / 120) return "same time"
         var h = Math.floor(Math.abs(d)), m = Math.round((Math.abs(d) - h) * 60)
         return (h > 0 ? h + "h" : "") + (h > 0 && m > 0 ? " " : "") + (m > 0 ? m + "m" : "")
-             + (d > 0 ? " ahead of here" : " behind here")
+             + (d > 0 ? " ahead" : " behind")
     }
 
     // === Display helpers ===
@@ -915,38 +915,6 @@ PluginComponent {
                     color: Theme.surfaceVariantText
                     wrapMode: Text.WordWrap
                 }
-            }
-        }
-
-        // --- What time it is there ---
-        // The first thing to know about somewhere else is what its clock says,
-        // and how far that is from ours.
-        Row {
-            visible: view.remote && view.place.located && (view.showsZone || view.place.zoneError !== "")
-            spacing: Theme.spacingXS
-            leftPadding: Theme.spacingXS
-
-            DIcon {
-                name: "schedule"
-                size: Theme.fontSizeMedium + 2
-                color: Theme.surfaceVariantText
-                anchors.verticalCenter: parent.verticalCenter
-            }
-
-            StyledText {
-                visible: view.showsZone
-                text: view.place.zoneClock(view.place.now)
-                font.pixelSize: Theme.fontSizeMedium
-                font.weight: Font.DemiBold
-                color: Theme.surfaceText
-                anchors.verticalCenter: parent.verticalCenter
-            }
-
-            StyledText {
-                text: view.showsZone ? "there  \u00b7  " + root.offsetText(view.place) : view.place.zoneError
-                font.pixelSize: Theme.fontSizeSmall
-                color: Theme.surfaceVariantText
-                anchors.verticalCenter: parent.verticalCenter
             }
         }
 
@@ -1452,15 +1420,77 @@ PluginComponent {
                             }
                         }
 
-                        DTabBar {
+                        // Which place, and the time at the other one. Shown
+                        // the same on both tabs, so switching changes what
+                        // the panel says and never how tall it is.
+                        Item {
                             width: headCol.width
+                            height: 26
                             visible: root.hasSecond
-                            currentIndex: root.popoutTab
-                            model: [
-                                { text: popoutRoot.shortName(here, "Here"), icon: "home_pin" },
-                                { text: popoutRoot.shortName(there, "Second location"), icon: "travel_explore" }
-                            ]
-                            onTabClicked: index => root.popoutTab = index
+
+                            Rectangle {
+                                id: switcher
+                                anchors.left: parent.left
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: segments.width + 4
+                                height: parent.height
+                                radius: height / 2
+                                color: Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.07)
+
+                                Row {
+                                    id: segments
+                                    anchors.centerIn: parent
+
+                                    Repeater {
+                                        model: [popoutRoot.shortName(here, "Here"),
+                                                popoutRoot.shortName(there, "There")]
+
+                                        delegate: Rectangle {
+                                            required property var modelData
+                                            required property int index
+                                            readonly property bool active: root.popoutTab === index
+                                            width: Math.min(110, segLabel.implicitWidth + Theme.spacingM * 2)
+                                            height: switcher.height - 4
+                                            radius: height / 2
+                                            color: active ? Theme.primary : "transparent"
+
+                                            Behavior on color { ColorAnimation { duration: 150 } }
+
+                                            StyledText {
+                                                id: segLabel
+                                                anchors.centerIn: parent
+                                                width: Math.min(implicitWidth, 110 - Theme.spacingM * 2)
+                                                text: modelData
+                                                elide: Text.ElideRight
+                                                font.pixelSize: Theme.fontSizeSmall
+                                                font.weight: active ? Font.DemiBold : Font.Normal
+                                                color: active ? Theme.primaryText : Theme.surfaceText
+                                            }
+
+                                            MouseArea {
+                                                anchors.fill: parent
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: root.popoutTab = index
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            StyledText {
+                                anchors.left: switcher.right
+                                anchors.leftMargin: Theme.spacingS
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                horizontalAlignment: Text.AlignRight
+                                elide: Text.ElideLeft
+                                textFormat: Text.StyledText
+                                font.pixelSize: Theme.fontSizeSmall
+                                color: Theme.surfaceVariantText
+                                text: !isNaN(there.zoneOffset)
+                                      ? "<b>" + there.zoneClock(there.now) + "</b> there  \u00b7  " + root.offsetText(there)
+                                      : (there.zoneError !== "" ? there.zoneError : "time there unknown")
+                            }
                         }
                     }
                 }
