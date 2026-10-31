@@ -1360,83 +1360,104 @@ PluginComponent {
                 anchors.fill: parent
                 anchors.margins: Theme.spacingM
 
-                // --- Date ---
-                Item {
+                // --- Date, and which place ---
+                // On a card like the rest: on the bare translucent surface the
+                // moon's percentage and the unselected tab faded into a light
+                // wallpaper.
+                Rectangle {
                     width: content.width
-                    height: Math.max(hijriLabel.height, refreshPill.height)
+                    height: headCol.implicitHeight + Theme.spacingS * 2
+                    radius: 12
+                    color: Theme.surfaceContainerHigh
 
-                    Row {
-                        id: hijriLabel
+                    Column {
+                        id: headCol
                         anchors.left: parent.left
-                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: Theme.spacingS
+                        anchors.leftMargin: Theme.spacingM
                         spacing: Theme.spacingXS
 
-                        MoonPhase {
-                            place: popoutRoot.shown
-                            anchors.verticalCenter: parent.verticalCenter
+                        // --- Date ---
+                        Item {
+                            width: headCol.width
+                            height: Math.max(hijriLabel.height, refreshPill.height)
+
+                            Row {
+                                id: hijriLabel
+                                anchors.left: parent.left
+                                anchors.verticalCenter: parent.verticalCenter
+                                spacing: Theme.spacingXS
+
+                                MoonPhase {
+                                    place: popoutRoot.shown
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+
+                                StyledText {
+                                    text: popoutRoot.shown.hijriText
+                                    font.pixelSize: Theme.fontSizeMedium
+                                    font.weight: Font.DemiBold
+                                    color: Theme.surfaceText
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+                            }
+
+                            // How full, and which way it is going. No arrow at new or
+                            // full: there the direction is turning over rather than
+                            // pointing anywhere, so an arrow would assert something false.
+                            StyledText {
+                                anchors.left: hijriLabel.right
+                                anchors.leftMargin: Theme.spacingS
+                                anchors.baseline: hijriLabel.top
+                                anchors.baselineOffset: hijriLabel.height / 2 + 4
+                                text: Math.round(popoutRoot.shown.moonLit * 100) + "%"
+                                      + (popoutRoot.shown.moonTurning ? "" : (popoutRoot.shown.moonWaxes ? " ↑" : " ↓"))
+                                font.pixelSize: Theme.fontSizeSmall - 1
+                                color: Theme.surfaceVariantText
+                                visible: popoutRoot.shown.hijriText !== "" && width + hijriLabel.width + 40 < parent.width
+                            }
+
+                            Rectangle {
+                                id: refreshPill
+                                width: 28
+                                height: 28
+                                radius: width / 2
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                color: refreshArea.containsMouse
+                                       ? Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.12)
+                                       : "transparent"
+
+                                DIcon {
+                                    name: "refresh"
+                                    size: Theme.iconSize - 4
+                                    color: refreshArea.containsMouse ? Theme.surfaceText : Theme.surfaceVariantText
+                                    anchors.centerIn: parent
+                                }
+
+                                MouseArea {
+                                    id: refreshArea
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: popoutRoot.shown.recompute()
+                                }
+                            }
                         }
 
-                        StyledText {
-                            text: popoutRoot.shown.hijriText
-                            font.pixelSize: Theme.fontSizeMedium
-                            font.weight: Font.DemiBold
-                            color: Theme.surfaceText
-                            anchors.verticalCenter: parent.verticalCenter
+                        DTabBar {
+                            width: headCol.width
+                            visible: root.hasSecond
+                            currentIndex: root.popoutTab
+                            model: [
+                                { text: popoutRoot.shortName(here, "Here"), icon: "home_pin" },
+                                { text: popoutRoot.shortName(there, "Second location"), icon: "travel_explore" }
+                            ]
+                            onTabClicked: index => root.popoutTab = index
                         }
                     }
-
-                    // How full, and which way it is going. No arrow at new or
-                    // full: there the direction is turning over rather than
-                    // pointing anywhere, so an arrow would assert something false.
-                    StyledText {
-                        anchors.left: hijriLabel.right
-                        anchors.leftMargin: Theme.spacingS
-                        anchors.baseline: hijriLabel.top
-                        anchors.baselineOffset: hijriLabel.height / 2 + 4
-                        text: Math.round(popoutRoot.shown.moonLit * 100) + "%"
-                              + (popoutRoot.shown.moonTurning ? "" : (popoutRoot.shown.moonWaxes ? " ↑" : " ↓"))
-                        font.pixelSize: Theme.fontSizeSmall - 1
-                        color: Theme.surfaceVariantText
-                        visible: popoutRoot.shown.hijriText !== "" && width + hijriLabel.width + 40 < parent.width
-                    }
-
-                    Rectangle {
-                        id: refreshPill
-                        width: 28
-                        height: 28
-                        radius: width / 2
-                        anchors.right: parent.right
-                        anchors.verticalCenter: parent.verticalCenter
-                        color: refreshArea.containsMouse
-                               ? Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.12)
-                               : "transparent"
-
-                        DIcon {
-                            name: "refresh"
-                            size: Theme.iconSize - 4
-                            color: refreshArea.containsMouse ? Theme.surfaceText : Theme.surfaceVariantText
-                            anchors.centerIn: parent
-                        }
-
-                        MouseArea {
-                            id: refreshArea
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: popoutRoot.shown.recompute()
-                        }
-                    }
-                }
-
-                DTabBar {
-                    width: content.width
-                    visible: root.hasSecond
-                    currentIndex: root.popoutTab
-                    model: [
-                        { text: popoutRoot.shortName(here, "Here"), icon: "home_pin" },
-                        { text: popoutRoot.shortName(there, "Second location"), icon: "travel_explore" }
-                    ]
-                    onTabClicked: index => root.popoutTab = index
                 }
 
                 PlaceView {
