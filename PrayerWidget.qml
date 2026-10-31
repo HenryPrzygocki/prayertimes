@@ -421,19 +421,35 @@ PluginComponent {
         readonly property bool isUrgent: currentWindow !== null
                                          && spanRemainingSec > 0 && spanRemainingSec <= 900
 
+        // The row the panel is about: the window that is open, or, between
+        // windows, the prayer that comes next. It carries the countdown and
+        // the bar, so each is said once.
+        readonly property real focusStart: currentWindow ? currentWindow.start : (next ? next.at : NaN)
+
+        // The table shows the prayer day that holds that row, so it never
+        // needs an extra one: until Islamic midnight, last night's Isha is
+        // still open and yesterday is shown; after a midnight that falls
+        // before 00:00, the next prayer is tomorrow's Fajr and tomorrow is.
+        readonly property int focusDay: {
+            if (days.length !== 3) return 1
+            if (currentWindow && currentWindow.start === days[0].at.isha) return 0
+            if (!currentWindow && next && next.at === days[2].at.fajr) return 2
+            return 1
+        }
+
         // The day as the table lists it. Sunrise and Islamic midnight open and
         // close nothing, so they are markers rather than windows.
         readonly property var rows: {
-            if (!today) return []
-            var a = today.at
+            if (days.length !== 3) return []
+            var a = days[focusDay].at
             return [
-                { label: "Fajr",             start: a.fajr,     end: a.sunrise, marker: false },
-                { label: "sunrise",          start: a.sunrise,  end: null,      marker: true  },
-                { label: "Dhuhr",            start: a.dhuhr,    end: a.asr,     marker: false },
-                { label: "Asr",              start: a.asr,      end: a.maghrib, marker: false },
-                { label: "Maghrib",          start: a.maghrib,  end: a.isha,    marker: false },
+                { label: "Fajr",             start: a.fajr,     end: a.sunrise,  marker: false },
+                { label: "sunrise",          start: a.sunrise,  end: null,       marker: true  },
+                { label: "Dhuhr",            start: a.dhuhr,    end: a.asr,      marker: false },
+                { label: "Asr",              start: a.asr,      end: a.maghrib,  marker: false },
+                { label: "Maghrib",          start: a.maghrib,  end: a.isha,     marker: false },
                 { label: "Isha",             start: a.isha,     end: a.midnight, marker: false },
-                { label: "Islamic midnight", start: a.midnight, end: null,      marker: true  }
+                { label: "Islamic midnight", start: a.midnight, end: null,       marker: true  }
             ]
         }
 
@@ -962,153 +978,11 @@ PluginComponent {
             }
         }
 
-        // --- What is next ---
-        // The panel's subject line. The first question anyone opens this for
-        // is which prayer is coming and when, so it is answered first, in the
-        // largest type, in a whole sentence.
-        Rectangle {
-            width: view.width
-            height: nextCol.implicitHeight + Theme.spacingM * 2
-            radius: 12
-            visible: view.place.located
-            color: Theme.surfaceContainerHigh
-
-            Column {
-                id: nextCol
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.leftMargin: Theme.spacingM
-                anchors.rightMargin: Theme.spacingM
-                spacing: 6
-
-                Item {
-                    width: parent.width
-                    height: nameRow.implicitHeight
-
-                    Row {
-                        id: nameRow
-                        anchors.left: parent.left
-                        spacing: Theme.spacingXS
-
-                        DIcon {
-                            name: root.getPrayerIcon(view.place.nextName)
-                            fill: root.getPrayerFill(view.place.nextName)
-                            size: Theme.iconSize - 6
-                            color: view.place.prayerColor(view.place.nextName)
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
-
-                        StyledText {
-                            text: view.place.nextName.toUpperCase()
-                            font.pixelSize: Theme.fontSizeMedium
-                            font.weight: Font.Bold
-                            font.letterSpacing: 0.6
-                            color: Theme.surfaceText
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
-                    }
-
-                    StyledText {
-                        anchors.right: parent.right
-                        anchors.verticalCenter: nameRow.verticalCenter
-                        textFormat: Text.StyledText
-                        text: !view.place.next ? ""
-                              : view.place.clockText(view.place.next.at, view.remote)
-                                + (view.showsZone ? "<small>  \u00b7  " + view.place.zoneClock(view.place.next.at) + " there</small>" : "")
-                        font.pixelSize: Theme.fontSizeMedium
-                        font.weight: Font.Medium
-                        color: Theme.surfaceVariantText
-                    }
-                }
-
-                StyledText {
-                    text: view.place.next ? ("in " + root.formatSplit(view.place.nextTotalSeconds)) : "—"
-                    font.pixelSize: Theme.fontSizeLarge + 8
-                    font.weight: Font.Bold
-                    color: Theme.surfaceText
-                }
-
-                // --- How far through the current window ---
-                // Linear, bounded and captioned. The caption is the whole point: an
-                // unlabelled bar is a puzzle, a labelled one is an instrument.
-                Column {
-                    width: parent.width
-                    spacing: 4
-                    topPadding: 2
-
-                    Item {
-                        width: parent.width
-                        height: 12
-
-                        StyledText {
-                            id: spanFrom
-                            anchors.left: parent.left
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: view.place.activeSpan ? view.place.clockText(view.place.activeSpan.start, view.remote) : ""
-                            font.pixelSize: Theme.fontSizeSmall - 1
-                            color: Theme.surfaceVariantText
-                        }
-
-                        StyledText {
-                            id: spanTo
-                            anchors.right: parent.right
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: view.place.activeSpan ? view.place.clockText(view.place.activeSpan.end, view.remote) : ""
-                            font.pixelSize: Theme.fontSizeSmall - 1
-                            color: Theme.surfaceVariantText
-                        }
-
-                        Rectangle {
-                            anchors.left: spanFrom.right
-                            anchors.right: spanTo.left
-                            anchors.leftMargin: Theme.spacingS
-                            anchors.rightMargin: Theme.spacingS
-                            anchors.verticalCenter: parent.verticalCenter
-                            height: 6
-                            radius: 3
-                            color: Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g,
-                                           Theme.surfaceText.b, 0.10)
-
-                            Rectangle {
-                                height: parent.height
-                                radius: parent.radius
-                                width: Math.min(1, view.place.spanProgress) * parent.width
-                                color: view.place.isUrgent ? Theme.error : Theme.primary
-
-                                Behavior on width { NumberAnimation { duration: 500; easing.type: Easing.OutCubic } }
-                                Behavior on color { ColorAnimation { duration: 400 } }
-                            }
-                        }
-                    }
-
-                    // What is open and how much of it is left. How long ago it began
-                    // is the one number here nobody acts on.
-                    StyledText {
-                        width: parent.width
-                        horizontalAlignment: Text.AlignHCenter
-                        text: {
-                            var w = view.place.activeSpan
-                            if (!w) return ""
-                            if (w.gap) return "No prayer due"
-                            return w.name + "  ·  " + root.formatSplit(view.place.spanRemainingSec) + " remaining"
-                        }
-                        font.pixelSize: Theme.fontSizeSmall
-                        font.weight: view.place.isUrgent ? Font.Medium : Font.Normal
-                        color: view.place.isUrgent ? Theme.error : Theme.surfaceVariantText
-
-                        Behavior on color { ColorAnimation { duration: 400 } }
-                    }
-                }
-            }
-        }
-
         // --- The day ---
-        // On a card of its own for the same reason as the countdown: the
-        // popout's surface is translucent, and over a light wallpaper the
-        // secondary text washed out to nothing. A solid card keeps it legible
-        // whatever is behind the shell, and gives the arc's markers the
-        // background their rings are drawn to match.
+        // On a solid card: the popout's surface is translucent, and over a
+        // light wallpaper secondary text washed out to nothing. The card keeps
+        // it legible whatever is behind the shell, and gives the arc's markers
+        // the background their rings are drawn to match.
         Rectangle {
             width: view.width
             height: dayCol.implicitHeight + Theme.spacingS * 2
@@ -1146,6 +1020,17 @@ PluginComponent {
                     visible: view.place.located
 
                     StyledText {
+                        anchors.left: parent.left
+                        anchors.leftMargin: 12
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: view.place.focusDay === 0 ? "yesterday"
+                              : view.place.focusDay === 2 ? "tomorrow" : ""
+                        font.pixelSize: Theme.fontSizeSmall - 2
+                        font.italic: true
+                        color: Theme.primary
+                    }
+
+                    StyledText {
                         anchors.right: parent.right
                         anchors.rightMargin: 84 + view.colShift
                         anchors.verticalCenter: parent.verticalCenter
@@ -1180,126 +1065,167 @@ PluginComponent {
                     model: view.place.rows
 
                     delegate: Item {
+                        id: row
                         required property var modelData
                         width: dayCol.width
-                        height: modelData.marker ? 24 : 30
+                        height: line.height + (isFocus ? 20 : 0)
 
-                        // Already over. Every row is an instant, so Isha's close and
-                        // Islamic midnight, which land after 00:00, need no special case.
+                        // Already over. Every row is an instant, so Isha's close
+                        // and Islamic midnight, which land after 00:00, need no
+                        // special case.
                         readonly property bool isPast: (modelData.end !== null ? modelData.end : modelData.start)
                                                        <= view.place.now
 
-                        // Matched by instant rather than by name: after Isha the next
-                        // prayer is tomorrow's Fajr, and this morning's Fajr row must
-                        // not claim it.
+                        // Matched by instant rather than by name: after Isha the
+                        // next prayer is tomorrow's Fajr, and this morning's Fajr
+                        // row must not claim it.
                         readonly property bool isNext: !modelData.marker && view.place.next !== null
                                                        && modelData.start === view.place.next.at
-                        readonly property bool isCurr: !modelData.marker && view.place.currentWindow !== null
-                                                       && modelData.start === view.place.currentWindow.start
+                        readonly property bool isFocus: !modelData.marker
+                                                        && modelData.start === view.place.focusStart
+                        readonly property bool open: isFocus && view.place.currentWindow !== null
+                        readonly property bool urgent: open && view.place.isUrgent
 
-                        // State lives in the row's fill and weight; identity lives in
-                        // the dot's colour. Two channels, never mixed. Only what is open
-                        // gets a fill. What is next is said in words, so two rows are
-                        // never lit at once.
+                        // State lives in the row's fill and weight; identity lives
+                        // in the dot's colour. Two channels, never mixed.
                         Rectangle {
                             anchors.fill: parent
                             anchors.topMargin: 1
                             anchors.bottomMargin: 1
-                            radius: height / 2
-                            color: parent.isCurr
-                                   ? Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.14)
+                            radius: 14
+                            color: row.isFocus
+                                   ? Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, row.open ? 0.16 : 0.08)
                                    : "transparent"
                         }
 
-                        Rectangle {
-                            anchors.left: parent.left
-                            anchors.leftMargin: 12
-                            anchors.verticalCenter: parent.verticalCenter
-                            width: modelData.marker ? 4 : 7
-                            height: width
-                            radius: width / 2
-                            color: view.place.prayerColor(modelData.label)
-                            opacity: parent.isPast ? 0.4 : 1
-                        }
+                        Item {
+                            id: line
+                            width: parent.width
+                            height: modelData.marker ? 24 : 30
 
-                        Row {
-                            anchors.left: parent.left
-                            anchors.leftMargin: modelData.marker ? 30 : 28
-                            anchors.verticalCenter: parent.verticalCenter
-                            spacing: 5
+                            Rectangle {
+                                anchors.left: parent.left
+                                anchors.leftMargin: 12
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: modelData.marker ? 4 : 7
+                                height: width
+                                radius: width / 2
+                                color: view.place.prayerColor(modelData.label)
+                                opacity: row.isPast ? 0.4 : 1
+                            }
 
+                            Row {
+                                anchors.left: parent.left
+                                anchors.leftMargin: modelData.marker ? 30 : 28
+                                anchors.verticalCenter: parent.verticalCenter
+                                spacing: 6
+
+                                StyledText {
+                                    text: modelData.label
+                                    font.pixelSize: modelData.marker ? Theme.fontSizeSmall : Theme.fontSizeMedium
+                                    font.weight: row.isFocus ? Font.Bold : Font.Normal
+                                    font.italic: modelData.marker
+                                    color: Theme.surfaceText
+                                    opacity: row.isPast ? 0.5 : (modelData.marker ? 0.8 : 1)
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+
+                                // The countdown, on the row it counts: how long is
+                                // left of what is open, or how long until what is
+                                // next. Elsewhere, a word marks the next prayer.
+                                StyledText {
+                                    visible: row.isFocus || row.isNext
+                                    text: row.open ? root.formatSplit(view.place.spanRemainingSec) + " left"
+                                          : row.isFocus ? "in " + root.formatSplit(view.place.nextTotalSeconds)
+                                          : "next"
+                                    font.pixelSize: row.isFocus ? Theme.fontSizeSmall : Theme.fontSizeSmall - 2
+                                    font.weight: row.isFocus ? Font.DemiBold : Font.Normal
+                                    font.italic: !row.isFocus
+                                    color: row.urgent ? Theme.error : Theme.primary
+                                    anchors.verticalCenter: parent.verticalCenter
+
+                                    Behavior on color { ColorAnimation { duration: 400 } }
+                                }
+                            }
+
+                            // Right-aligned columns. The headers name them, so no
+                            // arrow is needed in seven consecutive rows.
                             StyledText {
-                                text: modelData.label
-                                font.pixelSize: modelData.marker ? Theme.fontSizeSmall : Theme.fontSizeMedium
-                                font.weight: isCurr ? Font.Bold : Font.Normal
-                                font.italic: modelData.marker
+                                visible: !modelData.marker
+                                anchors.right: parent.right
+                                anchors.rightMargin: 84 + view.colShift
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: view.place.clockText(modelData.start, view.remote)
+                                font.pixelSize: Theme.fontSizeSmall
+                                font.weight: row.isFocus ? Font.Bold : Font.Normal
                                 color: Theme.surfaceText
-                                opacity: isPast ? 0.5 : (modelData.marker ? 0.8 : 1)
-                                anchors.verticalCenter: parent.verticalCenter
+                                opacity: row.isPast ? 0.5 : 1
                             }
 
                             StyledText {
-                                visible: isNext
-                                text: "upcoming"
-                                font.pixelSize: Theme.fontSizeSmall - 2
-                                font.italic: true
-                                color: Theme.primary
+                                visible: !modelData.marker
+                                anchors.right: parent.right
+                                anchors.rightMargin: 12 + view.colShift
                                 anchors.verticalCenter: parent.verticalCenter
+                                text: modelData.end !== null ? view.place.clockText(modelData.end, view.remote) : ""
+                                font.pixelSize: Theme.fontSizeSmall
+                                font.weight: row.isFocus ? Font.Bold : Font.Normal
+                                color: Theme.surfaceText
+                                opacity: row.isPast ? 0.45 : 0.85
+                            }
+
+                            // Sunrise and Islamic midnight open and close nothing,
+                            // so their single time sits centred across both
+                            // columns rather than pretending to be an opening.
+                            StyledText {
+                                visible: modelData.marker
+                                x: parent.width - 122 - view.colShift + (110 - width) / 2
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: view.place.clockText(modelData.start, view.remote)
+                                font.pixelSize: Theme.fontSizeSmall
+                                color: Theme.surfaceText
+                                opacity: row.isPast ? 0.45 : 0.8
+                            }
+
+                            // The same opening on the clock there, smaller and
+                            // quieter: the system's clock is what is acted on,
+                            // this is for reference.
+                            StyledText {
+                                visible: view.showsZone
+                                anchors.right: parent.right
+                                anchors.rightMargin: 12
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: view.place.zoneClock(modelData.start)
+                                font.pixelSize: Theme.fontSizeSmall - 1
+                                font.italic: true
+                                color: Theme.surfaceVariantText
+                                opacity: row.isPast ? 0.6 : 1
                             }
                         }
 
-                        // Right-aligned columns. The headers name them, so no arrow
-                        // is needed in seven consecutive rows.
-                        StyledText {
-                            visible: !modelData.marker
+                        // How far through: the open window from its opening to its
+                        // close, or the wait for the next prayer since the last
+                        // thing ended. Under the times it spans.
+                        Rectangle {
+                            visible: row.isFocus
+                            anchors.top: line.bottom
+                            anchors.left: parent.left
                             anchors.right: parent.right
-                            anchors.rightMargin: 84 + view.colShift
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: view.place.clockText(modelData.start, view.remote)
-                            font.pixelSize: Theme.fontSizeSmall
-                            font.weight: isCurr ? Font.Bold : Font.Normal
-                            color: Theme.surfaceText
-                            opacity: isPast ? 0.5 : 1
-                        }
-
-                        StyledText {
-                            visible: !modelData.marker
-                            anchors.right: parent.right
-                            anchors.rightMargin: 12 + view.colShift
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: modelData.end !== null ? view.place.clockText(modelData.end, view.remote) : ""
-                            font.pixelSize: Theme.fontSizeSmall
-                            font.weight: isCurr ? Font.Bold : Font.Normal
-                            color: Theme.surfaceText
-                            opacity: isPast ? 0.45 : 0.85
-                        }
-
-                        // Sunrise and Islamic midnight open and close nothing, so their
-                        // single time sits centred across both columns rather than
-                        // pretending to be an opening time.
-                        StyledText {
-                            visible: modelData.marker
-                            x: parent.width - 122 - view.colShift + (110 - width) / 2
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: view.place.clockText(modelData.start, view.remote)
-                            font.pixelSize: Theme.fontSizeSmall
-                            color: Theme.surfaceText
-                            opacity: isPast ? 0.45 : 0.8
-                        }
-
-                        // The same opening on the clock there, smaller and
-                        // quieter: the system's clock is what is acted on, this
-                        // is for reference.
-                        StyledText {
-                            visible: view.showsZone
-                            anchors.right: parent.right
+                            anchors.leftMargin: 28
                             anchors.rightMargin: 12
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: view.place.zoneClock(modelData.start)
-                            font.pixelSize: Theme.fontSizeSmall - 1
-                            font.italic: true
-                            color: Theme.surfaceVariantText
-                            opacity: isPast ? 0.6 : 1
+                            height: 4
+                            radius: 2
+                            color: Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.10)
+
+                            Rectangle {
+                                height: parent.height
+                                radius: parent.radius
+                                width: Math.min(1, view.place.spanProgress) * parent.width
+                                color: row.urgent ? Theme.error : Theme.primary
+
+                                Behavior on width { NumberAnimation { duration: 500; easing.type: Easing.OutCubic } }
+                                Behavior on color { ColorAnimation { duration: 400 } }
+                            }
                         }
                     }
                 }
