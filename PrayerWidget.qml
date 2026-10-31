@@ -906,12 +906,16 @@ PluginComponent {
             }
         }
 
-        // Each prayer named beside its dot, set in toward the centre of the
-        // ellipse, where the path leaves the space empty. The unit vector to
+        // Noon and midnight named beside their dots, set in toward the centre
+        // of the ellipse, where the path leaves the space empty. Only these
+        // two: at the top and bottom they have room, where the others crowd
+        // the corners and the thirds, and the table names those anyway. The unit vector to
         // the centre picks the alignment too: a label left of centre ends at
         // its anchor, one above it hangs from it.
         Repeater {
-            model: sky.frame ? sky.place.arcMarks : []
+            model: sky.frame ? sky.place.arcMarks.filter(function (m) {
+                return m.name === "Dhuhr" || m.name === "Islamic midnight"
+            }) : []
 
             delegate: StyledText {
                 required property var modelData
