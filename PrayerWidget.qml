@@ -75,15 +75,19 @@ PluginComponent {
 
     SystemClock {
         id: clock
-        // By the minute until a countdown enters its last ten, where it
-        // shows seconds (formatSplit). The extra minute of margin means the
-        // switch has happened before the first second is shown.
-        precision: Math.min(here.nextTotalSeconds || Infinity, here.spanRemainingSec || Infinity,
-                            there.nextTotalSeconds || Infinity, there.spanRemainingSec || Infinity) <= 660
-                   ? SystemClock.Seconds : SystemClock.Minutes
+        precision: root.fineClock ? SystemClock.Seconds : SystemClock.Minutes
     }
 
     readonly property real nowMs: clock.date.getTime()
+
+    // By the minute until a countdown enters its last ten, where it shows
+    // seconds (formatSplit). The extra minute of margin means the switch has
+    // happened before the first second is shown. Set from a handler, not
+    // bound: the countdowns are read off the clock this sets, which as a
+    // binding is a loop.
+    property bool fineClock: false
+    onNowMsChanged: fineClock = Math.min(here.nextTotalSeconds || Infinity, here.spanRemainingSec || Infinity,
+                                         there.nextTotalSeconds || Infinity, there.spanRemainingSec || Infinity) <= 660
     // The sun dot moves about a pixel a minute; redrawing the arc every second
     // when seconds are shown would repaint the canvas for nothing.
     readonly property real minuteMs: Math.floor(nowMs / 60000) * 60000
