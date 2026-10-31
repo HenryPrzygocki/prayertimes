@@ -1,9 +1,6 @@
 import QtQuick
-import QtQuick.Controls
 import Quickshell
-import Quickshell.Io
 import qs.Common
-import qs.Services
 import qs.DCommon.Widgets
 import qs.Modules.Plugins
 
@@ -16,7 +13,10 @@ PluginComponent {
     // coordinates; the old code interpolated them straight into a URL.
     property real lat: parseFloat(String(pluginData.lat || "").trim())
     property real lon: parseFloat(String(pluginData.lon || "").trim())
+    // Out of range is treated as unset: a latitude of 95 is a typo, and
+    // computing from it produced NaN times under a panel that looked live.
     readonly property bool located: !isNaN(lat) && !isNaN(lon)
+                                    && Math.abs(lat) <= 90 && Math.abs(lon) <= 180
 
     // The name of the place the coordinates came from, shown only while it still
     // describes them. Editing latitude or longitude by hand would otherwise
@@ -84,6 +84,7 @@ PluginComponent {
             method: root.method,
             asrFactor: root.school === "1" ? 2 : 1,
             highLat: root.highLat,
+            hijriOffset: root.hijriOffset,
             // Resolved per date so daylight-saving transitions are handled.
             tzOffset: -date.getTimezoneOffset() / 60
         }
@@ -409,7 +410,7 @@ PluginComponent {
         var ampm = hours >= 12 ? "PM" : "AM"
         hours = hours % 12
         if (hours === 0) hours = 12
-        return (hours < 10 ? "0" : "") + hours + ":" + parts[1] + " " + ampm
+        return hours + ":" + parts[1] + " " + ampm
     }
 
 
@@ -804,8 +805,8 @@ PluginComponent {
             spacing: 2
 
             DIcon {
-                name: root.getPrayerIcon(root.nextName)
-                fill: root.getPrayerFill(root.nextName)
+                name: root.located ? root.getPrayerIcon(root.nextName) : "location_off"
+                fill: root.located ? root.getPrayerFill(root.nextName) : 0.0
                 size: Theme.iconSize - 6
                 color: root.nextImminent ? Theme.error : Theme.surfaceText
                 anchors.horizontalCenter: parent.horizontalCenter
@@ -1414,7 +1415,8 @@ PluginComponent {
 
     // === Core ===
     // opts: { lat, lon, tzOffset (hours, DST-aware), method, asrFactor (1 Shafi | 2 Hanafi),
-    //         highLat ("angle" | "nightmiddle" | "seventh" | "none") }
+    //         highLat ("angle" | "nightmiddle" | "seventh" | "none"),
+    //         hijriOffset (days; decides when Ramadan's longer Isha interval applies) }
     // Returns times as fractional hours in local civil time, or null where the sun
     // never reaches the required altitude and no adjustment is requested.
     function computeDay(year, month, day, opts) {
@@ -1491,7 +1493,7 @@ PluginComponent {
             // Umm Al-Qura and the Gulf methods stretch the interval from 90 to 120
             // minutes throughout Ramadan.
             var mins = m.isha.minutes
-            if (m.isha.ramadanMinutes && hijriDate(year, month, day).month === 9)
+            if (m.isha.ramadanMinutes && hijriDate(year, month, day, opts.hijriOffset).month === 9)
                 mins = m.isha.ramadanMinutes
             times.isha = times.maghrib + mins / 60
         }
@@ -1571,23 +1573,22 @@ PluginComponent {
         return p < 0 ? p + 1 : p
     }
 
-
     // Fraction of the disc lit, 0 at new and 1 at full.
-function moonIllumination(phase) {
-    return (1 - Math.cos(2 * Math.PI * phase)) / 2
-}
+    function moonIllumination(phase) {
+        return (1 - Math.cos(2 * Math.PI * phase)) / 2
+    }
 
-// True while the lit fraction is growing. Meaningless at the two turning points,
-// where the direction is changing rather than pointing anywhere.
-function moonWaxing(phase) {
-    return phase < 0.5
-}
+    // True while the lit fraction is growing. Meaningless at the two turning points,
+    // where the direction is changing rather than pointing anywhere.
+    function moonWaxing(phase) {
+        return phase < 0.5
+    }
 
-function moonAtTurningPoint(phase) {
-    return phase < 0.02 || phase > 0.98 || (phase > 0.48 && phase < 0.52)
-}
+    function moonAtTurningPoint(phase) {
+        return phase < 0.02 || phase > 0.98 || (phase > 0.48 && phase < 0.52)
+    }
 
-function moonPhaseName(phase) {
+    function moonPhaseName(phase) {
         if (phase < 0.02 || phase > 0.98) return "New moon"
         if (phase < 0.23) return "Waxing crescent"
         if (phase < 0.27) return "First quarter"

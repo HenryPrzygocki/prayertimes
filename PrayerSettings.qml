@@ -149,7 +149,7 @@ PluginSettings {
 
     StyledText {
         width: parent.width
-        text: "Prayer times are computed on this machine from your coordinates. Nothing is fetched over the network."
+        text: "Prayer times are computed on this machine from your coordinates. The network is only used when you search for a place by name."
         font.pixelSize: Theme.fontSizeSmall
         color: Theme.surfaceVariantText
         wrapMode: Text.WordWrap
@@ -387,7 +387,7 @@ PluginSettings {
             ToggleSetting {
                 settingKey: "showPillProgress"
                 label: "Progress Rule"
-                description: "Draw a thin rule beneath the bar widget showing how much of the current window has passed"
+                description: "Draw a thin rule beneath the bar widget showing how far it is from the last prayer to the next"
                 defaultValue: true
             }
 
