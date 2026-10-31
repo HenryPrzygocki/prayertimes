@@ -13,7 +13,17 @@ nothing else, and `extract.mjs` lifts it out unchanged to run here.
 node fetchcache.mjs   # snapshot API responses to apicache.json (slow, rate-limited)
 node compare.mjs      # compare local computation against the snapshot
 node hijri.mjs        # score the tabular Hijri calendar against Aladhan's
+node timeline.mjs     # check the instant-based timeline (offline, no snapshot needed)
 ```
+
+`timeline.mjs` checks the layer the widget builds on `computeDay`: every event
+pinned to a real instant, the windows built from those, and the span and
+next-prayer lookups. Across 21 cities and both the US and EU daylight-saving
+transitions it checks that instants round-trip to the computed wall-clock
+times, that windows are ordered and leave no unaccounted minute, that the next
+prayer after Isha is tomorrow's Fajr, and that an event's instant does not
+depend on the zone it is viewed from. Days inside the polar circles, where
+`computeDay` collapses sunrise or sunset onto noon, are skipped.
 
 `compare.mjs` sources UTC offsets from glibc (`TZ=... date`) rather than node's
 bundled ICU copy, because Qt reads the system tzdata and the two disagree for

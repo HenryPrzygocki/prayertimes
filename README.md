@@ -11,7 +11,8 @@ prayer times, computed locally from the sun's position.
   they are calculated on this machine. Works offline, cannot be rate limited, and your
   coordinates are never sent anywhere. The sole exception is the place search in settings, which
   asks a directory for a named town's coordinates when you search for one, and can name the
-  coordinates you already have. Both look up a place, never an IP, so they are unaffected by a
+  coordinates you already have (which sends them to a reverse geocoder, and only when you press the
+  button). Both look up a place, never an IP, so they are unaffected by a
   VPN — unlike IP geolocation, which resolves to the provider's exchange (163 km out when tested
   here, enough to move every prayer by several minutes) and is not used.
 - **Prayers as windows, not instants.** Each prayer shows when it opens, when it closes, and how
@@ -19,6 +20,11 @@ prayer times, computed locally from the sun's position.
   than running on to Dhuhr, and Isha closes at Islamic midnight — the middle of the night — rather
   than at the following dawn. Both leave a stretch with no prayer due, and the widget says so
   outright rather than going blank.
+- **A second location**, on its own tab in the popout: somewhere else to keep an eye on, with its
+  prayer times on its own clock and on yours, the time there, and how far it is from here. Its time
+  zone is an IANA name, filled in by the place search, and its offsets are read from the system's
+  tzdata, so daylight saving is followed there as it changes. It may follow its own calculation
+  method; the bar keeps following the main location.
 - **Hijri date**, with an adjustment for calendars set by local moonsighting.
 - 22 calculation methods, both Asr schools, angle-based high-latitude handling, and a polar clamp.
 
@@ -34,11 +40,16 @@ applying undocumented defaults that contradict its own published parameters.
 cd test
 node fetchcache.mjs   # snapshot API responses
 node compare.mjs      # compare local computation against them
+node timeline.mjs     # windows and countdowns across DST changes and time zones (offline)
 ```
 
 ## Requirements
 
-DankMaterialShell ≥ 0.2.4 on Quickshell 0.2+. No external tools.
+DankMaterialShell (Dux Shell) ≥ 2.0. Version 3 of this plugin uses the `qs.DCommon.Widgets` set
+that 2.0 introduced; for an older shell, check out the `v2.1.0` tag.
+
+The `process` permission is used only to read a second location's time-zone offsets with
+`date(1)`. No other external tools.
 
 ## Installation
 
@@ -52,7 +63,8 @@ Then enable it in *DMS Settings → Plugins* and add the widget to a DankBar sec
 ## Configuration
 
 Set your latitude and longitude, pick the calculation method your local mosque follows, and choose
-the Asr school. Everything else is display preference.
+the Asr school. Everything else is display preference. A second location is optional; search for it
+and its coordinates and time zone are filled in together.
 
 Note that the calculation method is a *convention*, not a physical constant: methods differ only in
 which angle below the horizon counts as dawn and nightfall. The Asr school is the one setting that
