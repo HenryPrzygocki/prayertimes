@@ -50,17 +50,10 @@ PluginComponent {
 
     // === Second location ===
     // Shown on its own tab in the popout, never on the bar. It is computed
-    // exactly as the main one is, on the system's clock; its time zone (an IANA
-    // name, filled in by the place search) only adds its own clock beside that,
-    // in a lower register.
+    // exactly as the main one is, on the system's clock; the clock there is
+    // only added beside that, in a lower register.
     property real secLat: parseFloat(String(pluginData.secLat || "").trim())
     property real secLon: parseFloat(String(pluginData.secLon || "").trim())
-    // Settings resolve the zone from the coordinates and record which ones it
-    // was resolved for; like a place's name, it is only used while it still
-    // describes them.
-    readonly property string secZone: labelFor(String(pluginData.secZone || "").trim(),
-                                               pluginData.secZoneLat, pluginData.secZoneLon,
-                                               secLat, secLon)
     readonly property string secMethod: pluginData.secMethod && pluginData.secMethod !== "same"
                                         ? pluginData.secMethod : method
     readonly property string secLabel: labelFor(pluginData.secLabel, pluginData.secPlaceLat,
@@ -100,12 +93,13 @@ PluginComponent {
         property string label: ""
         property string method: "2"
 
-        // Every place is computed on the system's clock. A place may also name
-        // its own zone, whose current UTC offset is looked up so its times can
-        // be read off the clock there as well (see lookupZone).
-        property string zone: ""
+        // Every place is computed on the system's clock. A place may also show
+        // the clock there, whose UTC offset is then looked up from its
+        // coordinates (see lookupOffset).
+        property bool showsOwnClock: false
         property real zoneOffset: NaN
-        property string zoneError: ""
+        property real zoneCheckedAt: 0
+        property bool zoneLoading: false
 
         // Out of range is treated as unset: a latitude of 95 is a typo, and
         // computing from it produced NaN times under a panel that looked live.
@@ -164,16 +158,21 @@ PluginComponent {
             debounce.restart()
         }
 
-        onLatChanged: refresh()
-        onLonChanged: refresh()
+        // A new place's clock is unknown until asked, not the old one's.
+        onLatChanged: { zoneOffset = NaN; refresh() }
+        onLonChanged: { zoneOffset = NaN; refresh() }
         onMethodChanged: refresh()
-        onZoneChanged: lookupZone()
         Component.onCompleted: refresh()
 
         // Prayer times are a deterministic function of the date, so they only
         // need recomputing when the civil date rolls over -- not on a polling
         // interval.
-        onNowChanged: if (dateKey(civilDate(now)) !== lastComputed) recompute()
+        onNowChanged: {
+            if (dateKey(civilDate(now)) !== lastComputed)
+                recompute()
+            else if (now - zoneCheckedAt > 3600000)
+                lookupOffset()
+        }
 
         Timer {
             id: debounce
@@ -198,9 +197,7 @@ PluginComponent {
                 clear()
                 return
             }
-            // Offsets change at most once a day, so the zone is re-read when
-            // the day is.
-            lookupZone()
+            lookupOffset()
             var c = civilDate(now)
             var dates = [], offsets = []
             for (var k = -1; k <= 1; k++) {
@@ -213,39 +210,48 @@ PluginComponent {
             computeDays(dates, offsets)
         }
 
-        // QML's Date knows only the system's zone, so another zone's offset
-        // comes from glibc's tzdata via date(1), the same source Qt reads. The
-        // zone is passed as an argument, never spliced into the script, and
-        // must be a real TZif file: glibc silently reads an unknown TZ as UTC,
-        // which would show every time hours out without a word.
-        //
-        // The offset is the one in force now, applied to the whole day. On the
-        // two days a year the clocks change there, times on the far side of
-        // the change read an hour out on that clock -- the system-clock times,
-        // which are what is acted on, are unaffected.
-        function lookupZone() {
-            var z = place.zone
-            zoneError = ""
-            if (z === "") {
+        // QML's Date knows only the system's zone, so the offset there is
+        // asked of open-meteo, which answers for a bare pair of coordinates
+        // ("timezone=auto") with the zone's offset in force right now. It is
+        // re-asked hourly, which picks up a daylight-saving change there within
+        // the hour, and retries the same way after a failure. This is the
+        // widget's only network request, and only for the second location.
+        function lookupOffset() {
+            if (!showsOwnClock || !located) {
                 zoneOffset = NaN
                 return
             }
-            var script = 'z=$0\n'
-                + 'case $z in ""|/*|*..*) exit 2;; esac\n'
-                + 'f="/usr/share/zoneinfo/$z"\n'
-                + '[ -f "$f" ] && [ "$(head -c 4 "$f")" = TZif ] || exit 2\n'
-                + 'TZ="$z" date +%z\n'
-            Proc.runCommand("prayerTimes.zone", ["sh", "-c", script, z], function (out, code) {
-                if (z !== place.zone)
-                    return   // superseded while it ran
-                var o = String(out || "").trim()
-                if (code !== 0 || !/^[+-]\d{4}$/.test(o)) {
-                    zoneOffset = NaN
-                    zoneError = "Unknown time zone \u201c" + z + "\u201d."
+            if (zoneLoading)
+                return
+            zoneLoading = true
+            zoneCheckedAt = now
+            var key = lat.toFixed(4) + "," + lon.toFixed(4)
+            var xhr = new XMLHttpRequest()
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== XMLHttpRequest.DONE)
+                    return
+                zoneLoading = false
+                if (key !== lat.toFixed(4) + "," + lon.toFixed(4)) {
+                    lookupOffset()   // the place moved while this was out
                     return
                 }
-                zoneOffset = (o[0] === "-" ? -1 : 1) * (Number(o.slice(1, 3)) + Number(o.slice(3, 5)) / 60)
-            }, 0)
+                var secs = NaN
+                try {
+                    if (xhr.status === 200)
+                        secs = Number(JSON.parse(xhr.responseText).utc_offset_seconds)
+                } catch (e) {}
+                if (isFinite(secs)) {
+                    zoneOffset = secs / 3600
+                    return
+                }
+                // On failure a known offset is kept -- an hour-old answer beats
+                // none -- and the next try comes in five minutes, not an hour.
+                zoneCheckedAt = now - 3300000
+                console.warn("prayerTimes: no UTC offset for", key, "- status", xhr.status)
+            }
+            xhr.open("GET", "https://api.open-meteo.com/v1/forecast?forecast_days=1&timezone=auto"
+                          + "&latitude=" + lat.toFixed(4) + "&longitude=" + lon.toFixed(4))
+            xhr.send()
         }
 
         function computeDays(dates, offsets) {
@@ -408,8 +414,7 @@ PluginComponent {
         }
 
         // The same instant on the clock there, tagged against that clock's
-        // today. Empty when the place names no zone, or one that did not
-        // resolve.
+        // today. Empty until the offset there is known.
         function zoneClock(ms) {
             if (ms === null || ms === undefined || isNaN(ms) || isNaN(zoneOffset)) return ""
             var shifted = function (t) {
@@ -437,9 +442,9 @@ PluginComponent {
 
     Place {
         id: there
+        showsOwnClock: true
         lat: root.secLat
         lon: root.secLon
-        zone: root.secZone
         method: root.secMethod
         label: root.secLabel
     }
@@ -1489,7 +1494,7 @@ PluginComponent {
                                 color: Theme.surfaceVariantText
                                 text: !isNaN(there.zoneOffset)
                                       ? "<b>" + there.zoneClock(there.now) + "</b> there  \u00b7  " + root.offsetText(there)
-                                      : (there.zoneError !== "" ? there.zoneError : "time there unknown")
+                                      : (there.zoneLoading ? "checking the time there\u2026" : "time there unknown")
                             }
                         }
                     }
