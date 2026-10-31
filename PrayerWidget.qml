@@ -44,7 +44,6 @@ PluginComponent {
     property string highLat: pluginData.highLat || "angle"
     property int hijriOffset: Number(pluginData.hijriOffset) || 0
     property bool iconOnly: pluginData.iconOnly ?? false
-    property bool showSeconds: pluginData.showSeconds ?? false
     property bool use12H: pluginData.use12H ?? false
     property bool showPillProgress: pluginData.showPillProgress ?? true
 
@@ -76,7 +75,12 @@ PluginComponent {
 
     SystemClock {
         id: clock
-        precision: root.showSeconds ? SystemClock.Seconds : SystemClock.Minutes
+        // By the minute until a countdown enters its last ten, where it
+        // shows seconds (formatSplit). The extra minute of margin means the
+        // switch has happened before the first second is shown.
+        precision: Math.min(here.nextTotalSeconds || Infinity, here.spanRemainingSec || Infinity,
+                            there.nextTotalSeconds || Infinity, there.spanRemainingSec || Infinity) <= 660
+                   ? SystemClock.Seconds : SystemClock.Minutes
     }
 
     readonly property real nowMs: clock.date.getTime()
@@ -466,12 +470,11 @@ PluginComponent {
             return span > 0 ? Math.max(0, Math.min(1, (now - start) / span)) : 0
         }
 
-        // The bar reddens when the next prayer is nearly here; the panel
-        // reddens when the open window is nearly over. Different facts, kept
-        // apart.
-        readonly property bool nextImminent: nextTotalSeconds > 0 && nextTotalSeconds <= 900
-        readonly property bool isUrgent: currentWindow !== null
-                                         && spanRemainingSec > 0 && spanRemainingSec <= 900
+        // The bar warms as the next prayer nears; the panel warms as the open
+        // window runs out. Different facts, kept apart. Graded, not switched:
+        // 0 as usual, 1 (orange) inside twenty minutes, 2 (red) inside ten.
+        readonly property int nextLevel: root.urgencyLevel(nextTotalSeconds)
+        readonly property int spanLevel: currentWindow !== null ? root.urgencyLevel(spanRemainingSec) : 0
 
         // The row the panel is about: the window that is open, or, between
         // windows, the sunrise or midnight that began the wait. It carries the
@@ -579,13 +582,23 @@ PluginComponent {
 
     // "02:01" reads as a clock time, which is exactly what it is not. Units
     // remove the ambiguity at a glance and cost two characters.
+    // Seconds only once they matter: inside the last ten minutes, when the
+    // countdown has turned red.
     function formatSplit(totalSeconds) {
         var s = Math.max(0, totalSeconds)
         var h = Math.floor(s / 3600)
         var m = Math.floor((s % 3600) / 60)
         if (h > 0) return h + "h " + (m < 10 ? "0" : "") + m + "m"
-        if (root.showSeconds) return m + "m " + ((s % 60) < 10 ? "0" : "") + (s % 60) + "s"
+        if (s < 600) return m + "m " + ((s % 60) < 10 ? "0" : "") + (s % 60) + "s"
         return m + "m"
+    }
+
+    function urgencyLevel(seconds) {
+        return seconds <= 0 ? 0 : seconds <= 600 ? 2 : seconds <= 1200 ? 1 : 0
+    }
+
+    function urgencyColor(level, calm) {
+        return level === 2 ? Theme.error : level === 1 ? Theme.warning : calm
     }
 
     // Colour taken from where the sun actually is. Every prayer is defined by a
@@ -983,7 +996,7 @@ PluginComponent {
                     name: here.located ? root.getPrayerIcon(here.nextName) : "location_off"
                     fill: here.located ? root.getPrayerFill(here.nextName) : 0.0
                     size: Theme.iconSize - 6
-                    color: here.nextImminent ? Theme.error : Theme.surfaceText
+                    color: root.urgencyColor(here.nextLevel, Theme.surfaceText)
                     anchors.verticalCenter: parent.verticalCenter
 
                     Behavior on color { ColorAnimation { duration: 400 } }
@@ -994,8 +1007,8 @@ PluginComponent {
                     width: visible ? implicitWidth : 0
                     text: here.next ? root.formatSplit(here.nextTotalSeconds) : "…"
                     font.pixelSize: Theme.fontSizeSmall
-                    font.weight: here.nextImminent ? Font.Bold : Font.Normal
-                    color: here.nextImminent ? Theme.error : Theme.surfaceText
+                    font.weight: here.nextLevel > 0 ? Font.Bold : Font.Normal
+                    color: root.urgencyColor(here.nextLevel, Theme.surfaceText)
                     anchors.verticalCenter: parent.verticalCenter
 
                     Behavior on color { ColorAnimation { duration: 400 } }
@@ -1017,7 +1030,7 @@ PluginComponent {
                     height: parent.height
                     radius: parent.radius
                     width: Math.min(1, here.progressToNext) * parent.width
-                    color: here.nextImminent ? Theme.error : root.accentColor
+                    color: root.urgencyColor(here.nextLevel, root.accentColor)
 
                     Behavior on width { NumberAnimation { duration: 500; easing.type: Easing.OutCubic } }
                 }
@@ -1033,7 +1046,7 @@ PluginComponent {
                 name: here.located ? root.getPrayerIcon(here.nextName) : "location_off"
                 fill: here.located ? root.getPrayerFill(here.nextName) : 0.0
                 size: Theme.iconSize - 6
-                color: here.nextImminent ? Theme.error : Theme.surfaceText
+                color: root.urgencyColor(here.nextLevel, Theme.surfaceText)
                 anchors.horizontalCenter: parent.horizontalCenter
 
                 Behavior on color { ColorAnimation { duration: 400 } }
@@ -1043,7 +1056,7 @@ PluginComponent {
                 visible: here.next !== null
                 text: root.formatSplit(here.nextTotalSeconds)
                 font.pixelSize: Theme.fontSizeSmall - 2
-                color: here.nextImminent ? Theme.error : Theme.surfaceText
+                color: root.urgencyColor(here.nextLevel, Theme.surfaceText)
                 anchors.horizontalCenter: parent.horizontalCenter
             }
         }
@@ -1224,7 +1237,7 @@ PluginComponent {
                         readonly property bool isFocus: modelData.start === view.place.focusStart
                         readonly property bool open: isFocus && view.place.currentWindow !== null
                         readonly property bool isPicked: view.picked === modelData.key
-                        readonly property bool urgent: open && view.place.isUrgent
+                        readonly property int level: open ? view.place.spanLevel : 0
 
                         // State lives in the row's fill and weight; identity lives
                         // in the dot's colour. Two channels, never mixed.
@@ -1288,7 +1301,7 @@ PluginComponent {
                                     font.pixelSize: row.isFocus || row.isPicked ? Theme.fontSizeSmall : Theme.fontSizeSmall - 2
                                     font.weight: row.isFocus || row.isPicked ? Font.DemiBold : Font.Normal
                                     font.italic: !row.isFocus && !row.isPicked
-                                    color: row.isPicked ? Theme.secondary : row.urgent ? Theme.error : Theme.primary
+                                    color: row.isPicked ? Theme.secondary : root.urgencyColor(row.level, Theme.primary)
                                     anchors.verticalCenter: parent.verticalCenter
 
                                     Behavior on color { ColorAnimation { duration: 400 } }
@@ -1368,7 +1381,7 @@ PluginComponent {
                                 height: parent.height
                                 radius: parent.radius
                                 width: Math.min(1, view.place.spanProgress) * parent.width
-                                color: row.urgent ? Theme.error : Theme.primary
+                                color: root.urgencyColor(row.level, Theme.primary)
 
                                 Behavior on width { NumberAnimation { duration: 500; easing.type: Easing.OutCubic } }
                                 Behavior on color { ColorAnimation { duration: 400 } }

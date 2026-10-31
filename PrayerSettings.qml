@@ -548,13 +548,6 @@ PluginSettings {
             }
 
             ToggleSetting {
-                settingKey: "showSeconds"
-                label: "Show Seconds"
-                description: "Count down to the second rather than the minute"
-                defaultValue: false
-            }
-
-            ToggleSetting {
                 settingKey: "use12H"
                 label: "12-Hour Format"
                 description: "Display times in 12-hour format instead of 24-hour"
