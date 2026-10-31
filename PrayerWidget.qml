@@ -906,33 +906,57 @@ PluginComponent {
             }
         }
 
-        // The thirds' labels, in the empty middle of the ellipse: each set
-        // in from its mark toward the centre, on the side facing it.
+        // Each prayer named beside its dot, set in toward the centre of the
+        // ellipse, where the path leaves the space empty. The unit vector to
+        // the centre picks the alignment too: a label left of centre ends at
+        // its anchor, one above it hangs from it.
         Repeater {
-            model: sky.frame ? sky.place.thirdMarks : []
+            model: sky.frame ? sky.place.arcMarks : []
 
-            delegate: Row {
-                id: third
+            delegate: StyledText {
                 required property var modelData
                 readonly property real mx: sky.px(modelData.x)
                 readonly property real my: sky.py(modelData.z)
-                readonly property bool leftSide: mx < sky.px((sky.frame.x0 + sky.frame.x1) / 2)
-                spacing: 4
-                x: leftSide ? mx + 9 : mx - 9 - width
-                y: my - height / 2 - 6
+                readonly property real dx: sky.px((sky.frame.x0 + sky.frame.x1) / 2) - mx
+                readonly property real dy: sky.py((sky.frame.z0 + sky.frame.z1) / 2) - my
+                readonly property real ux: dx / Math.max(1e-6, Math.sqrt(dx * dx + dy * dy))
+                readonly property real uy: dy / Math.max(1e-6, Math.sqrt(dx * dx + dy * dy))
+                x: mx + 8 * ux - width * (1 - ux) / 2
+                y: my + 8 * uy - height * (1 - uy) / 2
+                text: modelData.name === "Islamic midnight" ? "midnight" : modelData.name
+                font.pixelSize: Theme.fontSizeSmall - 2
+                color: Theme.surfaceVariantText
+            }
+        }
+
+        // The thirds' labels, mirror images of each other: time over name, as
+        // in the corners, centred a third and two thirds of the way across,
+        // on one line halfway down the night between horizon and nadir. The
+        // last third is on the left, where the night ends, since east is.
+        Repeater {
+            model: sky.frame ? sky.place.thirdMarks : []
+
+            delegate: Column {
+                id: third
+                required property var modelData
+                readonly property bool last: modelData.name === "last third"
+                readonly property real midY: (sky.py(0) + sky.py(sky.frame.z0)) / 2
+                spacing: -1
+                x: sky.padX + (sky.width - 2 * sky.padX) * (last ? 1 / 3 : 2 / 3) - width / 2
+                y: Math.min(sky.height - height, midY - height / 2)
 
                 StyledText {
-                    anchors.baseline: time.baseline
-                    text: third.modelData.name
-                    font.pixelSize: Theme.fontSizeSmall - 2
-                    color: Theme.surfaceVariantText
-                }
-                StyledText {
-                    id: time
+                    anchors.horizontalCenter: parent.horizontalCenter
                     text: sky.place.clockText(third.modelData.at)
                     font.pixelSize: Theme.fontSizeSmall - 1
                     color: Theme.surfaceText
                     opacity: 0.8
+                }
+                StyledText {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: third.modelData.name
+                    font.pixelSize: Theme.fontSizeSmall - 2
+                    color: Theme.surfaceVariantText
                 }
             }
         }
