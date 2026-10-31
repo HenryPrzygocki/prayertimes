@@ -13,33 +13,32 @@ PluginComponent {
     // coordinates; the old code interpolated them straight into a URL.
     property real lat: parseFloat(String(pluginData.lat || "").trim())
     property real lon: parseFloat(String(pluginData.lon || "").trim())
-    // Out of range is treated as unset: a latitude of 95 is a typo, and
-    // computing from it produced NaN times under a panel that looked live.
-    readonly property bool located: !isNaN(lat) && !isNaN(lon)
-                                    && Math.abs(lat) <= 90 && Math.abs(lon) <= 180
 
     // The name of the place the coordinates came from, shown only while it still
     // describes them. Editing latitude or longitude by hand would otherwise
     // leave the old name sitting under the new numbers, and a label that quietly
     // disagrees with what it labels is worse than no label at all.
-    readonly property string placeLabel: {
-        var name = pluginData.placeLabel || ""
-        if (!name || !located)
+    readonly property string placeLabel: labelFor(pluginData.placeLabel, pluginData.placeLat,
+                                                  pluginData.placeLon, lat, lon)
+
+    function labelFor(name, pLat, pLon, lat, lon) {
+        if (!name || isNaN(lat) || isNaN(lon))
             return ""
-        var pLat = parseFloat(String(pluginData.placeLat || "").trim())
-        var pLon = parseFloat(String(pluginData.placeLon || "").trim())
+        pLat = parseFloat(String(pLat || "").trim())
+        pLon = parseFloat(String(pLon || "").trim())
         if (isNaN(pLat) || isNaN(pLon))
             return ""
         // A hundred metres of slack, well inside the rounding already applied.
         return (Math.abs(pLat - lat) < 0.001 && Math.abs(pLon - lon) < 0.001) ? name : ""
     }
 
-    function coordText() {
-        if (!located)
+    function coordText(lat, lon) {
+        if (isNaN(lat) || isNaN(lon))
             return ""
-        return Math.abs(lat).toFixed(2) + "\u00b0" + (lat >= 0 ? "N" : "S") + "   "
-             + Math.abs(lon).toFixed(2) + "\u00b0" + (lon >= 0 ? "E" : "W")
+        return Math.abs(lat).toFixed(2) + "°" + (lat >= 0 ? "N" : "S") + "   "
+             + Math.abs(lon).toFixed(2) + "°" + (lon >= 0 ? "E" : "W")
     }
+
     property string method: pluginData.method || "2"
     property string school: pluginData.school || "0"
     property string highLat: pluginData.highLat || "angle"
@@ -49,136 +48,322 @@ PluginComponent {
     property bool use12H: pluginData.use12H ?? false
     property bool showPillProgress: pluginData.showPillProgress ?? true
 
-    // === Computed state ===
-    // Times are fractional hours in local civil time. Tomorrow is needed because
-    // after Isha the next prayer is tomorrow's Fajr, and Isha's window runs until
-    // tomorrow's dawn.
-    property var yesterdayTimes: null
-    property var todayTimes: null
-    property var tomorrowTimes: null
-    property var sunSamples: []
-    property real moonFraction: 0
-    property string moonName: ""
-    property real moonLit: 0
-    property bool moonWaxes: true
-    property bool moonTurning: false
-    property var prayerAlt: ({})
-    property string hijriText: ""
-    property string lastComputed: ""
-
-    property string nextName: ""
-    property real nextAt: 0            // fractional hours, may exceed 24 (tomorrow)
-    property int nextTotalSeconds: 0
-
-    // Urgent once there is under a quarter of an hour left to pray what is open.
-    readonly property bool isUrgent: currentWindow !== null
-                                     && spanRemainingSec > 0 && spanRemainingSec <= 900
     readonly property color accentColor: Theme.primary
 
+    // The conventions shared by every place: the Asr school is a juristic
+    // choice of the person praying, not of the town.
+    onSchoolChanged: here.refresh()
+    onHighLatChanged: here.refresh()
+    onHijriOffsetChanged: here.refresh()
 
-    // === Computation ===
-    function optionsFor(date) {
-        return {
-            lat: root.lat,
-            lon: root.lon,
-            method: root.method,
-            asrFactor: root.school === "1" ? 2 : 1,
-            highLat: root.highLat,
-            hijriOffset: root.hijriOffset,
-            // Resolved per date so daylight-saving transitions are handled.
-            tzOffset: -date.getTimezoneOffset() / 60
+    SystemClock {
+        id: clock
+        precision: root.showSeconds ? SystemClock.Seconds : SystemClock.Minutes
+    }
+
+    readonly property real nowMs: clock.date.getTime()
+
+    // === A place ===
+    // Everything derived from one set of coordinates: the three days of times
+    // around today, the windows and countdowns built on them, the sky and the
+    // moon. The bar reads the configured location through `here`.
+    component Place: Item {
+        id: place
+        visible: false
+
+        property real lat: NaN
+        property real lon: NaN
+        property string label: ""
+        property string method: "2"
+
+        // Out of range is treated as unset: a latitude of 95 is a typo, and
+        // computing from it produced NaN times under a panel that looked live.
+        readonly property bool located: !isNaN(lat) && !isNaN(lon)
+                                        && Math.abs(lat) <= 90 && Math.abs(lon) <= 180
+
+        // Yesterday, today and tomorrow, each { y, m, d, tz, times, at }: times
+        // in this place's wall-clock hours, `at` the same events as instants.
+        // Yesterday because the small hours before dawn still belong to its
+        // Isha window; tomorrow because the countdown after Isha runs to its
+        // Fajr.
+        property var days: []
+        property string lastComputed: ""
+        property string hijriText: ""
+        property real moonFraction: 0
+        property string moonName: ""
+        property real moonLit: 0
+        property bool moonWaxes: true
+        property bool moonTurning: false
+        property var sunSamples: []
+        property var prayerAlt: ({})
+
+        readonly property var today: days.length === 3 ? days[1] : null
+        readonly property real now: root.nowMs
+
+        // UTC offset in hours at an instant, and the civil date it falls on.
+        function offsetAt(ms) {
+            return -new Date(ms).getTimezoneOffset() / 60
         }
-    }
 
-    function computeFor(date) {
-        return computeDay(date.getFullYear(), date.getMonth() + 1, date.getDate(),
-                               optionsFor(date))
-    }
+        function civilDate(ms) {
+            var d = new Date(ms)
+            return [d.getFullYear(), d.getMonth() + 1, d.getDate()]
+        }
 
-    // Prayer times are a deterministic function of the date, so this only needs
-    // to run when the date changes -- not on a polling interval.
-    function recompute() {
-        if (!root.located) {
+        function dateKey(ymd) {
+            return ymd[0] + "-" + ymd[1] + "-" + ymd[2]
+        }
+
+        function optionsFor(tz) {
+            return {
+                lat: place.lat,
+                lon: place.lon,
+                method: place.method,
+                asrFactor: root.school === "1" ? 2 : 1,
+                highLat: root.highLat,
+                hijriOffset: root.hijriOffset,
+                tzOffset: tz
+            }
+        }
+
+        // Settings arrive one key at a time, so recomputing waits for them to
+        // settle rather than running once per keystroke.
+        function refresh() {
+            debounce.restart()
+        }
+
+        onLatChanged: refresh()
+        onLonChanged: refresh()
+        onMethodChanged: refresh()
+        Component.onCompleted: refresh()
+
+        // Prayer times are a deterministic function of the date, so they only
+        // need recomputing when the civil date rolls over -- not on a polling
+        // interval.
+        onNowChanged: if (dateKey(civilDate(now)) !== lastComputed) recompute()
+
+        Timer {
+            id: debounce
+            interval: 400
+            onTriggered: place.recompute()
+        }
+
+        function clear() {
             // Clear everything derived. Leaving yesterday's times, the sampled
             // arc and the Hijri date behind drew a live sky for wherever the
             // coordinates used to point, under a card showing nothing.
-            root.yesterdayTimes = null
-            root.todayTimes = null
-            root.tomorrowTimes = null
-            root.sunSamples = []
-            root.prayerAlt = ({})
-            root.hijriText = ""
-            root.moonName = ""
-            root.nextName = ""
-            root.nextAt = 0
-            root.nextTotalSeconds = 0
-            return
+            days = []
+            lastComputed = ""
+            hijriText = ""
+            moonName = ""
+            sunSamples = []
+            prayerAlt = ({})
         }
-        var now = new Date()
-        var noon = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12)
 
-        // Yesterday is needed because the small hours before dawn still belong
-        // to yesterday's Isha window; tomorrow, because that window ends at
-        // tomorrow's dawn.
-        root.yesterdayTimes = computeFor(new Date(noon.getTime() - 86400000))
-        root.todayTimes = computeFor(noon)
-        root.tomorrowTimes = computeFor(new Date(noon.getTime() + 86400000))
-        root.hijriText = formatHijri(
-            hijriDate(now.getFullYear(), now.getMonth() + 1, now.getDate(), root.hijriOffset))
-        root.lastComputed = Qt.formatDate(now, "yyyy-MM-dd")
-        updateCountdown()
+        function recompute() {
+            if (!located) {
+                clear()
+                return
+            }
+            var c = civilDate(now)
+            var dates = [], offsets = []
+            for (var k = -1; k <= 1; k++) {
+                // Resolved at noon of each day, so daylight-saving changes,
+                // which happen in the small hours, are never straddled.
+                var noon = new Date(c[0], c[1] - 1, c[2] + k, 12)
+                dates.push([noon.getFullYear(), noon.getMonth() + 1, noon.getDate()])
+                offsets.push(-noon.getTimezoneOffset() / 60)
+            }
+            computeDays(dates, offsets)
+        }
 
-        // The arc and the moon are the parts that can be done without, so they
-        // go last and behind a guard: whatever they may throw, the times, the
-        // date and the countdown above are already set. The caching problem that
-        // originally motivated this is gone -- the calculation was moved into
-        // this file to end it -- but the ordering is worth keeping on its own
-        // merits, since an ornament should not be able to blank the panel.
-        try {
-            root.moonFraction = moonPhase(now.getFullYear(), now.getMonth() + 1, now.getDate())
-            root.moonName = moonPhaseName(root.moonFraction)
-            root.moonLit = moonIllumination(root.moonFraction)
-            root.moonWaxes = moonWaxing(root.moonFraction)
-            root.moonTurning = moonAtTurningPoint(root.moonFraction)
+        function computeDays(dates, offsets) {
+            var out = []
+            for (var i = 0; i < 3; i++) {
+                var dt = dates[i]
+                var times = root.computeDay(dt[0], dt[1], dt[2], optionsFor(offsets[i]))
+                out.push({ y: dt[0], m: dt[1], d: dt[2], tz: offsets[i], times: times,
+                           at: root.dayInstants(dt[0], dt[1], dt[2], times, offsets[i]) })
+            }
+            days = out
+            var t = out[1]
+            lastComputed = dateKey([t.y, t.m, t.d])
+            hijriText = root.formatHijri(root.hijriDate(t.y, t.m, t.d, root.hijriOffset))
 
-            // A full turn of the sky. The ellipse closes, so the night needs no
-            // cropping and the sun never leaves the frame.
-            root.sunSamples = sampleSun(noon)
-            root.prayerAlt = samplePrayerAltitudes(noon)
-        } catch (e) {
-            root.sunSamples = []
-            root.prayerAlt = ({})
-            root.moonName = ""
-            console.warn("prayerTimes: sun path unavailable —", e)
+            // The arc and the moon are the parts that can be done without, so
+            // they go last and behind a guard: whatever they may throw, the
+            // times, the date and the countdown above are already set, and an
+            // ornament cannot blank the panel.
+            try {
+                moonFraction = root.moonPhase(t.y, t.m, t.d)
+                moonName = root.moonPhaseName(moonFraction)
+                moonLit = root.moonIllumination(moonFraction)
+                moonWaxes = root.moonWaxing(moonFraction)
+                moonTurning = root.moonAtTurningPoint(moonFraction)
+                sunSamples = sampleSun()
+                prayerAlt = samplePrayerAltitudes()
+            } catch (e) {
+                sunSamples = []
+                prayerAlt = ({})
+                moonName = ""
+                console.warn("prayerTimes: sun path unavailable —", e)
+            }
+        }
+
+        // === The sky ===
+        function sunPoint(hours) {
+            var t = today
+            return root.sunSkyPoint(t.y, t.m, t.d, hours, optionsFor(t.tz))
+        }
+
+        // The sun's altitude across the civil day, sampled once when the day
+        // rolls over. The arc is then a fixed shape with only the sun moving
+        // along it, which keeps the panel calm and lets the eye learn the
+        // silhouette.
+        function sampleSun() {
+            var out = []
+            for (var i = 0; i <= 240; i++) {
+                var h = i * 24 / 240
+                var pt = sunPoint(h)
+                out.push({ h: h, x: pt.x, z: pt.z, alt: pt.alt })
+            }
+            return out
+        }
+
+        function samplePrayerAltitudes() {
+            var out = {}
+            var keys = { Fajr: "fajr", Sunrise: "sunrise", Dhuhr: "dhuhr", Asr: "asr",
+                         Maghrib: "maghrib", Isha: "isha", "Islamic midnight": "midnight" }
+            for (var name in keys)
+                out[name] = sunPoint(today.times[keys[name]]).alt
+            return out
+        }
+
+        function prayerColor(name) {
+            var a = prayerAlt[name]
+            return a === undefined ? Theme.surfaceVariantText : root.skyColor(a)
+        }
+
+        // Every event plotted on the curve. Each is by definition the instant
+        // the sun reaches a given altitude, so the altitude is what places it --
+        // the point sits on the path rather than beside it.
+        readonly property var arcMarks: {
+            if (!today) return []
+            var out = []
+            var keys = [["Fajr", "fajr"], ["Dhuhr", "dhuhr"], ["Asr", "asr"],
+                        ["Maghrib", "maghrib"], ["Isha", "isha"],
+                        ["Islamic midnight", "midnight"]]
+            for (var i = 0; i < keys.length; i++) {
+                var h = today.times[keys[i][1]]
+                if (h === undefined || isNaN(h)) continue
+                var pt = sunPoint(h % 24)
+                out.push({ name: keys[i][0], x: pt.x, z: pt.z, alt: pt.alt })
+            }
+            return out
+        }
+
+        // Where the sun is on that ellipse right now. Hours are counted from
+        // this place's midnight in real time, so a DST change earlier in the
+        // day does not move the sun an hour off its true position.
+        readonly property var sunNow: {
+            if (!today) return null
+            return sunPoint((now - root.instantOf(today.y, today.m, today.d, 0, today.tz)) / 3600000)
+        }
+
+        // === The timeline ===
+        readonly property var windows: days.length === 3 ? root.prayerWindows(days[0].at, days[1].at) : []
+        readonly property var schedule: days.length === 3 ? root.prayerSchedule(days[1].at, days[2].at) : []
+        readonly property int nextIdx: root.nextIndex(schedule, now)
+        readonly property var next: nextIdx >= 0 ? schedule[nextIdx] : null
+        readonly property string nextName: next ? next.name : ""
+        readonly property int nextTotalSeconds: next ? Math.max(0, secondsUntil(next.at)) : 0
+
+        // The stretch the interface is describing, and whether it is a prayer
+        // window or the gap before one.
+        readonly property var activeSpan: root.spanAt(windows, now)
+        readonly property var currentWindow: activeSpan && !activeSpan.gap ? activeSpan : null
+
+        readonly property int spanElapsedSec: activeSpan ? Math.max(0, -secondsUntil(activeSpan.start)) : 0
+        readonly property int spanRemainingSec: activeSpan ? Math.max(0, secondsUntil(activeSpan.end)) : 0
+        readonly property real spanProgress: {
+            var total = spanElapsedSec + spanRemainingSec
+            return total > 0 ? spanElapsedSec / total : 0
+        }
+
+        // Progress across the interval between one prayer and the next, which
+        // is what the bar's rule sits under. Before dawn the interval began at
+        // yesterday's Isha.
+        readonly property real progressToNext: {
+            if (!next) return 0
+            var start = nextIdx > 0 ? schedule[nextIdx - 1].at : days[0].at.isha
+            var span = next.at - start
+            return span > 0 ? Math.max(0, Math.min(1, (now - start) / span)) : 0
+        }
+
+        // The bar reddens when the next prayer is nearly here; the panel
+        // reddens when the open window is nearly over. Different facts, kept
+        // apart.
+        readonly property bool nextImminent: nextTotalSeconds > 0 && nextTotalSeconds <= 900
+        readonly property bool isUrgent: currentWindow !== null
+                                         && spanRemainingSec > 0 && spanRemainingSec <= 900
+
+        // The day as the table lists it. Sunrise and Islamic midnight open and
+        // close nothing, so they are markers rather than windows.
+        readonly property var rows: {
+            if (!today) return []
+            var a = today.at
+            return [
+                { label: "Fajr",             start: a.fajr,     end: a.sunrise, marker: false },
+                { label: "sunrise",          start: a.sunrise,  end: null,      marker: true  },
+                { label: "Dhuhr",            start: a.dhuhr,    end: a.asr,     marker: false },
+                { label: "Asr",              start: a.asr,      end: a.maghrib, marker: false },
+                { label: "Maghrib",          start: a.maghrib,  end: a.isha,    marker: false },
+                { label: "Isha",             start: a.isha,     end: a.midnight, marker: false },
+                { label: "Islamic midnight", start: a.midnight, end: null,      marker: true  }
+            ]
+        }
+
+        function secondsUntil(ms) {
+            return Math.round((ms - now) / 1000)
+        }
+
+        // An instant on this place's wall clock, in the user's 12/24-hour style.
+        function clockText(ms) {
+            if (ms === null || ms === undefined || isNaN(ms)) return ""
+            return root.formatTime(root.toHHMM(root.wallHours(ms, offsetAt(ms))))
         }
     }
 
-    // The sun's altitude across the civil day, sampled once when the day rolls
-    // over. The arc is then a fixed shape with only the sun moving along it,
-    // which keeps the panel calm and lets the eye learn the silhouette.
-    function sampleSun(noon) {
-        var o = optionsFor(noon)
-        var y = noon.getFullYear(), m = noon.getMonth() + 1, d = noon.getDate()
-        var out = []
-        for (var i = 0; i <= 240; i++) {
-            var h = i * 24 / 240
-            var pt = sunSkyPoint(y, m, d, h, o)
-            out.push({ h: h, x: pt.x, z: pt.z, alt: pt.alt })
-        }
-        return out
+    Place {
+        id: here
+        lat: root.lat
+        lon: root.lon
+        method: root.method
+        label: root.placeLabel
     }
 
-    function samplePrayerAltitudes(noon) {
-        var t = root.todayTimes
-        if (!t) return ({})
-        var o = optionsFor(noon)
-        var y = noon.getFullYear(), m = noon.getMonth() + 1, d = noon.getDate()
-        var out = {}
-        var keys = { Fajr: "fajr", Sunrise: "sunrise", Dhuhr: "dhuhr", Asr: "asr",
-                     Maghrib: "maghrib", Isha: "isha", "Islamic midnight": "midnight" }
-        for (var name in keys)
-            out[name] = sunSkyPoint(y, m, d, t[keys[name]], o).alt
-        return out
+    // === Display helpers ===
+    function formatTime(time24h) {
+        if (!time24h || time24h === "") return ""
+        if (!root.use12H) return time24h
+        var parts = time24h.split(":")
+        if (parts.length < 2) return time24h
+        var hours = parseInt(parts[0], 10)
+        var ampm = hours >= 12 ? "PM" : "AM"
+        hours = hours % 12
+        if (hours === 0) hours = 12
+        return hours + ":" + parts[1] + " " + ampm
+    }
+
+    // "02:01" reads as a clock time, which is exactly what it is not. Units
+    // remove the ambiguity at a glance and cost two characters.
+    function formatSplit(totalSeconds) {
+        var s = Math.max(0, totalSeconds)
+        var h = Math.floor(s / 3600)
+        var m = Math.floor((s % 3600) / 60)
+        if (h > 0) return h + "h " + (m < 10 ? "0" : "") + m + "m"
+        if (root.showSeconds) return m + "m " + ((s % 60) < 10 ? "0" : "") + (s % 60) + "s"
+        return m + "m"
     }
 
     // Colour taken from where the sun actually is. Every prayer is defined by a
@@ -192,269 +377,6 @@ PluginComponent {
         if (alt >= -1)  return "#CE5439"   // at the horizon
         if (alt >= -12) return "#7A5E9B"   // civil twilight
         return "#46578F"                   // night
-    }
-
-    function prayerColor(name) {
-        var a = root.prayerAlt[name]
-        return a === undefined ? Theme.surfaceVariantText : skyColor(a)
-    }
-
-    // Every event plotted on the curve. Each is by definition the instant the
-    // sun reaches a given altitude, so the altitude is what places it -- the
-    // point sits on the path rather than beside it.
-    readonly property var arcMarks: {
-        var t = root.todayTimes
-        if (!t) return []
-        var now = new Date()
-        var noon = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12)
-        var o = optionsFor(noon)
-        var out = []
-        var keys = [["Fajr", "fajr"], ["Dhuhr", "dhuhr"], ["Asr", "asr"],
-                    ["Maghrib", "maghrib"], ["Isha", "isha"],
-                    ["Islamic midnight", "midnight"]]
-        for (var i = 0; i < keys.length; i++) {
-            var h = t[keys[i][1]]
-            if (h === undefined || isNaN(h)) continue
-            var pt = sunSkyPoint(noon.getFullYear(), noon.getMonth() + 1,
-                                      noon.getDate(), h % 24, o)
-            out.push({ name: keys[i][0], x: pt.x, z: pt.z, alt: pt.alt })
-        }
-        return out
-    }
-
-
-
-
-    // Where the sun is on that ellipse right now.
-    readonly property var sunNow: {
-        var d = clock.date
-        if (!root.todayTimes) return null
-        var noon = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12)
-        return sunSkyPoint(d.getFullYear(), d.getMonth() + 1, d.getDate(),
-                                nowHours(), optionsFor(noon))
-    }
-
-
-    // Progress across the interval between one prayer and the next, which is
-    // what the bar's rule sits under.
-    readonly property real progressToNext: {
-        var sc = root.schedule
-        if (sc.length === 0) return 0
-        var h = nowHours()
-        var prev = null, next = null
-        for (var i = 0; i < sc.length; i++)
-            if (sc[i].at > h) { next = sc[i]; prev = i > 0 ? sc[i - 1] : null; break }
-        if (!next) return 0
-        var start = prev ? prev.at
-                  : (yesterdayTimes ? yesterdayTimes.isha - 24 : next.at - 1)
-        var span = next.at - start
-        return span > 0 ? Math.max(0, Math.min(1, (h - start) / span)) : 0
-    }
-
-    // The bar reddens when the next prayer is nearly here; the panel reddens
-    // when the open window is nearly over. Different facts, kept apart.
-    readonly property bool nextImminent: nextTotalSeconds > 0 && nextTotalSeconds <= 900
-
-
-    // === Prayer periods ===
-    // The ordered list of prayer starts spanning now, closing with tomorrow's
-    // Fajr so the Isha -> Fajr countdown crosses midnight cleanly.
-    readonly property var schedule: {
-        if (!todayTimes || !tomorrowTimes) return []
-        return [
-            { name: "Fajr",    at: todayTimes.fajr },
-            { name: "Dhuhr",   at: todayTimes.dhuhr },
-            { name: "Asr",     at: todayTimes.asr },
-            { name: "Maghrib", at: todayTimes.maghrib },
-            { name: "Isha",    at: todayTimes.isha },
-            { name: "Fajr",    at: tomorrowTimes.fajr + 24 }
-        ]
-    }
-
-    // === Prayer windows ===
-    // How long each prayer may be prayed for. Most windows close when the next
-    // prayer opens; two do not. Fajr closes at sunrise rather than running on to
-    // Dhuhr, and Isha closes at Islamic midnight -- the middle of the night --
-    // rather than at the following dawn. Isha may still be prayed after that out
-    // of necessity, but its time has ended, so midnight is the limit shown.
-    //
-    // Hours may fall outside [0,24) so that a window spanning midnight stays a
-    // single contiguous interval.
-    readonly property var windows: {
-        if (!yesterdayTimes || !todayTimes || !tomorrowTimes) return []
-        var y = yesterdayTimes, t = todayTimes, m = tomorrowTimes
-
-        // Islamic midnight lands in the small hours, so place it on whichever
-        // side of 00:00 keeps it inside its own night.
-        function nightMidnight(times, base) {
-            return times.midnight < 12 ? times.midnight + base : times.midnight + base - 24
-        }
-
-        return [
-            { name: "Isha",    start: y.isha - 24, end: nightMidnight(y, 0),  endLabel: "Islamic midnight" },
-            { name: "Fajr",    start: t.fajr,      end: t.sunrise,            endLabel: "sunrise" },
-            { name: "Dhuhr",   start: t.dhuhr,     end: t.asr,                endLabel: "Asr" },
-            { name: "Asr",     start: t.asr,       end: t.maghrib,            endLabel: "Maghrib" },
-            { name: "Maghrib", start: t.maghrib,   end: t.isha,               endLabel: "Isha" },
-            { name: "Isha",    start: t.isha,      end: nightMidnight(t, 24), endLabel: "Islamic midnight" }
-        ]
-    }
-
-    // The window we are inside right now, or null between sunrise and Dhuhr,
-    // when no prayer is due.
-    readonly property var currentWindow: {
-        var h = nowHours()
-        var w = root.windows
-        for (var i = 0; i < w.length; i++)
-            if (h >= w[i].start && h < w[i].end) return w[i]
-        return null
-    }
-
-    // The stretch the interface is currently describing. Between sunrise and
-    // Dhuhr no prayer is open, so the gap itself becomes the span -- which keeps
-    // one card, one bar and one countdown covering every moment of the day
-    // instead of the panel emptying out for five hours each morning.
-    readonly property var activeSpan: {
-        if (currentWindow) return currentWindow
-        var w = root.windows
-        if (w.length === 0) return null
-        var h = nowHours()
-        // There are two stretches with nothing due: sunrise to Dhuhr, and now
-        // Islamic midnight to dawn, since Isha's time ends at midnight.
-        for (var i = 0; i < w.length - 1; i++)
-            if (h >= w[i].end && h < w[i + 1].start)
-                return { name: "", start: w[i].end, end: w[i + 1].start,
-                         endLabel: w[i + 1].name, gap: true }
-        return null
-    }
-
-    readonly property int spanElapsedSec: {
-        var w = activeSpan
-        return w ? Math.max(0, -secondsUntil(w.start)) : 0
-    }
-
-    readonly property int spanRemainingSec: {
-        var w = activeSpan
-        return w ? Math.max(0, secondsUntil(w.end)) : 0
-    }
-
-    readonly property real spanProgress: {
-        var total = spanElapsedSec + spanRemainingSec
-        return total > 0 ? spanElapsedSec / total : 0
-    }
-
-
-
-
-
-
-
-    // A point on today's wall-clock timeline, as a real instant. Values at or
-    // past 24 belong to tomorrow, below zero to yesterday.
-    function instantAt(at) {
-        var n = clock.date
-        var wall = at, dayDelta = 0
-        while (wall >= 24) { wall -= 24; dayDelta += 1 }
-        while (wall < 0)   { wall += 24; dayDelta -= 1 }
-        var h = Math.floor(wall)
-        var mi = Math.floor((wall - h) * 60)
-        var se = Math.round((((wall - h) * 60) - mi) * 60)
-        return new Date(n.getFullYear(), n.getMonth(), n.getDate() + dayDelta, h, mi, se)
-    }
-
-    // Durations are measured between real instants, never by subtracting
-    // wall-clock hours. A day containing a daylight-saving change is 23 or 25
-    // hours long and the hours inside it are not uniform, so the difference of
-    // two clock readings that straddle the change is not the time between them:
-    // the overnight countdown came out an hour wrong on both transition days.
-    function secondsUntil(at) {
-        return Math.round((instantAt(at).getTime() - clock.date.getTime()) / 1000)
-    }
-
-    function nowHours() {
-        var d = clock.date
-        return d.getHours() + d.getMinutes() / 60 + d.getSeconds() / 3600
-    }
-
-    function updateCountdown() {
-        var sched = root.schedule
-        if (sched.length === 0) return
-
-        var h = nowHours()
-        var idx = -1
-        for (var i = 0; i < sched.length; i++)
-            if (sched[i].at > h) { idx = i; break }
-
-        var next = idx < 0 ? sched[sched.length - 1] : sched[idx]
-
-        root.nextName = next.name
-        root.nextAt = next.at
-
-        var diff = secondsUntil(next.at)
-        if (diff < 0) diff += 86400
-        root.nextTotalSeconds = diff
-
-    }
-
-    // === Display helpers ===
-    function hhmm(hours) {
-        return toHHMM(hours)
-    }
-
-    function formatTime(time24h) {
-        if (!time24h || time24h === "") return ""
-        if (!root.use12H) return time24h
-        var parts = time24h.split(":")
-        if (parts.length < 2) return time24h
-        var hours = parseInt(parts[0], 10)
-        var ampm = hours >= 12 ? "PM" : "AM"
-        hours = hours % 12
-        if (hours === 0) hours = 12
-        return hours + ":" + parts[1] + " " + ampm
-    }
-
-
-    // "02:01" reads as a clock time, which is exactly what it is not. Units
-    // remove the ambiguity at a glance and cost two characters.
-    function formatSplit(totalSeconds) {
-        var s = Math.max(0, totalSeconds)
-        var h = Math.floor(s / 3600)
-        var m = Math.floor((s % 3600) / 60)
-        if (h > 0) return h + "h " + (m < 10 ? "0" : "") + m + "m"
-        if (root.showSeconds) return m + "m " + ((s % 60) < 10 ? "0" : "") + (s % 60) + "s"
-        return m + "m"
-    }
-
-
-
-    // === Lifecycle ===
-    onPluginServiceChanged: if (pluginService) recompute()
-
-    onLatChanged: debounceTimer.restart()
-    onLonChanged: debounceTimer.restart()
-    onMethodChanged: debounceTimer.restart()
-    onSchoolChanged: debounceTimer.restart()
-    onHighLatChanged: debounceTimer.restart()
-    onHijriOffsetChanged: debounceTimer.restart()
-
-    Timer {
-        id: debounceTimer
-        interval: 400
-        repeat: false
-        onTriggered: root.recompute()
-    }
-
-    SystemClock {
-        id: clock
-        precision: root.showSeconds ? SystemClock.Seconds : SystemClock.Minutes
-        onDateChanged: {
-            // Recompute only when the civil date rolls over. Prayer times are
-            // indexed by the solar day, so this is the only moment they change.
-            if (Qt.formatDate(clock.date, "yyyy-MM-dd") !== root.lastComputed)
-                root.recompute()
-            else
-                root.updateCountdown()
-        }
     }
 
     // === Prayer icons ===
@@ -483,20 +405,21 @@ PluginComponent {
         return i ? i.fill : 0.0
     }
 
-    // Horizontal bar pill:
     // The moon as it actually looks tonight. Drawn rather than picked from a
     // set of glyphs, because the terminator is a smooth function of the phase
     // and a handful of fixed icons would quantise it. It sits beside the Hijri
     // date because that calendar counts exactly this.
     component MoonPhase: Item {
         id: moon
+        required property var place
         implicitWidth: 15
         implicitHeight: 15
 
         Connections {
-            target: root
+            target: moon.place
             function onMoonFractionChanged() { moonCanvas.requestPaint() }
         }
+        onPlaceChanged: moonCanvas.requestPaint()
         Component.onCompleted: moonCanvas.requestPaint()
 
         Canvas {
@@ -509,7 +432,7 @@ PluginComponent {
                 ctx.reset()
                 var r = Math.min(width, height) / 2 - 0.5
                 var cx = width / 2, cy = height / 2
-                var p = root.moonFraction
+                var p = moon.place.moonFraction
                 var k = Math.cos(2 * Math.PI * p)      // +1 new, -1 full
                 var lit = (1 - k) / 2
                 var waxing = p < 0.5
@@ -557,6 +480,7 @@ PluginComponent {
     // East is on the left, as it is for an observer facing the equator.
     component SunPath: Item {
         id: sky
+        required property var place
 
         readonly property int padX: 12
         readonly property int padY: 7
@@ -566,9 +490,10 @@ PluginComponent {
         Component.onCompleted: repaint()
         onWidthChanged: repaint()
         onVisibleChanged: if (visible) repaint()
+        onPlaceChanged: repaint()
 
         Connections {
-            target: root
+            target: sky.place
             function onSunSamplesChanged() { sky.repaint() }
             function onSunNowChanged() { sky.repaint() }
         }
@@ -582,7 +507,7 @@ PluginComponent {
                 var ctx = getContext("2d")
                 ctx.reset()
 
-                var s = root.sunSamples
+                var s = sky.place.sunSamples
                 if (!s || s.length === 0) return
 
                 var x0 = 9, x1 = -9, z0 = 9, z1 = -9
@@ -665,7 +590,7 @@ PluginComponent {
 
                 // Each prayer as a point on the path, ringed in the panel's own
                 // background so it reads against the curve behind it.
-                var marks = root.arcMarks
+                var marks = sky.place.arcMarks
                 for (var n = 0; n < marks.length; n++) {
                     var cx = px(marks[n].x), cy = py(marks[n].z)
                     ctx.beginPath()
@@ -679,7 +604,7 @@ PluginComponent {
                 }
 
                 // Where the sun is now: filled by day, hollow by night.
-                var now = root.sunNow
+                var now = sky.place.sunNow
                 if (!now) return
                 var sx = px(now.x), sy = py(now.z)
                 var c = root.skyColor(now.alt)
@@ -706,7 +631,7 @@ PluginComponent {
             spacing: -1
 
             StyledText {
-                text: root.todayTimes ? root.formatTime(root.hhmm(root.todayTimes.sunrise)) : ""
+                text: sky.place.today ? sky.place.clockText(sky.place.today.at.sunrise) : ""
                 font.pixelSize: Theme.fontSizeSmall - 1
                 color: Theme.surfaceText
                 opacity: 0.8
@@ -726,7 +651,7 @@ PluginComponent {
 
             StyledText {
                 anchors.right: parent.right
-                text: root.todayTimes ? root.formatTime(root.hhmm(root.todayTimes.maghrib)) : ""
+                text: sky.place.today ? sky.place.clockText(sky.place.today.at.maghrib) : ""
                 font.pixelSize: Theme.fontSizeSmall - 1
                 color: Theme.surfaceText
                 opacity: 0.8
@@ -755,10 +680,10 @@ PluginComponent {
                 anchors.horizontalCenter: parent.horizontalCenter
 
                 DIcon {
-                    name: root.located ? root.getPrayerIcon(root.nextName) : "location_off"
-                    fill: root.located ? root.getPrayerFill(root.nextName) : 0.0
+                    name: here.located ? root.getPrayerIcon(here.nextName) : "location_off"
+                    fill: here.located ? root.getPrayerFill(here.nextName) : 0.0
                     size: Theme.iconSize - 6
-                    color: root.nextImminent ? Theme.error : Theme.surfaceText
+                    color: here.nextImminent ? Theme.error : Theme.surfaceText
                     anchors.verticalCenter: parent.verticalCenter
 
                     Behavior on color { ColorAnimation { duration: 400 } }
@@ -767,10 +692,10 @@ PluginComponent {
                 StyledText {
                     visible: !root.iconOnly
                     width: visible ? implicitWidth : 0
-                    text: root.schedule.length > 0 ? root.formatSplit(root.nextTotalSeconds) : "\u2026"
+                    text: here.next ? root.formatSplit(here.nextTotalSeconds) : "…"
                     font.pixelSize: Theme.fontSizeSmall
-                    font.weight: root.nextImminent ? Font.Bold : Font.Normal
-                    color: root.nextImminent ? Theme.error : Theme.surfaceText
+                    font.weight: here.nextImminent ? Font.Bold : Font.Normal
+                    color: here.nextImminent ? Theme.error : Theme.surfaceText
                     anchors.verticalCenter: parent.verticalCenter
 
                     Behavior on color { ColorAnimation { duration: 400 } }
@@ -781,7 +706,7 @@ PluginComponent {
             // a deliberate margin rather than a rule that nearly reaches the
             // pill's edge and stops.
             Rectangle {
-                visible: root.showPillProgress && root.schedule.length > 0
+                visible: root.showPillProgress && here.next !== null
                 width: Math.max(12, pillRow.width - Theme.spacingS * 2)
                 height: 2
                 radius: 1
@@ -791,8 +716,8 @@ PluginComponent {
                 Rectangle {
                     height: parent.height
                     radius: parent.radius
-                    width: Math.min(1, root.progressToNext) * parent.width
-                    color: root.nextImminent ? Theme.error : root.accentColor
+                    width: Math.min(1, here.progressToNext) * parent.width
+                    color: here.nextImminent ? Theme.error : root.accentColor
 
                     Behavior on width { NumberAnimation { duration: 500; easing.type: Easing.OutCubic } }
                 }
@@ -805,21 +730,419 @@ PluginComponent {
             spacing: 2
 
             DIcon {
-                name: root.located ? root.getPrayerIcon(root.nextName) : "location_off"
-                fill: root.located ? root.getPrayerFill(root.nextName) : 0.0
+                name: here.located ? root.getPrayerIcon(here.nextName) : "location_off"
+                fill: here.located ? root.getPrayerFill(here.nextName) : 0.0
                 size: Theme.iconSize - 6
-                color: root.nextImminent ? Theme.error : Theme.surfaceText
+                color: here.nextImminent ? Theme.error : Theme.surfaceText
                 anchors.horizontalCenter: parent.horizontalCenter
 
                 Behavior on color { ColorAnimation { duration: 400 } }
             }
 
             StyledText {
-                visible: root.schedule.length > 0
-                text: root.formatSplit(root.nextTotalSeconds)
+                visible: here.next !== null
+                text: root.formatSplit(here.nextTotalSeconds)
                 font.pixelSize: Theme.fontSizeSmall - 2
-                color: root.nextImminent ? Theme.error : Theme.surfaceText
+                color: here.nextImminent ? Theme.error : Theme.surfaceText
                 anchors.horizontalCenter: parent.horizontalCenter
+            }
+        }
+    }
+
+    // Everything the popout says about one place, from the countdown down to
+    // the footer naming it.
+    component PlaceView: Column {
+        id: view
+        required property var place
+        spacing: Theme.spacingS
+
+        // --- Nothing to compute from ---
+        Rectangle {
+            width: view.width
+            height: emptyCol.implicitHeight + Theme.spacingL * 2
+            radius: 12
+            visible: !view.place.located
+            color: Theme.surfaceContainerHigh
+
+            Column {
+                id: emptyCol
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: Theme.spacingM
+                anchors.rightMargin: Theme.spacingM
+                spacing: Theme.spacingXS
+
+                Row {
+                    spacing: Theme.spacingS
+
+                    DIcon {
+                        name: "location_off"
+                        size: Theme.iconSize - 4
+                        color: Theme.surfaceVariantText
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    StyledText {
+                        text: "No location set"
+                        font.pixelSize: Theme.fontSizeMedium
+                        font.weight: Font.Bold
+                        color: Theme.surfaceText
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+
+                StyledText {
+                    width: parent.width
+                    text: "Prayer times are computed from your coordinates. Set them in plugin settings, or search there for your town."
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: Theme.surfaceVariantText
+                    wrapMode: Text.WordWrap
+                }
+            }
+        }
+
+        // --- What is next ---
+        // The panel's subject line. The first question anyone opens this for
+        // is which prayer is coming and when, so it is answered first, in the
+        // largest type, in a whole sentence.
+        Rectangle {
+            width: view.width
+            height: nextCol.implicitHeight + Theme.spacingM * 2
+            radius: 12
+            visible: view.place.located
+            color: Theme.surfaceContainerHigh
+
+            Column {
+                id: nextCol
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: Theme.spacingM
+                anchors.rightMargin: Theme.spacingM
+                spacing: 6
+
+                Item {
+                    width: parent.width
+                    height: nameRow.implicitHeight
+
+                    Row {
+                        id: nameRow
+                        anchors.left: parent.left
+                        spacing: Theme.spacingXS
+
+                        DIcon {
+                            name: root.getPrayerIcon(view.place.nextName)
+                            fill: root.getPrayerFill(view.place.nextName)
+                            size: Theme.iconSize - 6
+                            color: view.place.prayerColor(view.place.nextName)
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+
+                        StyledText {
+                            text: view.place.nextName.toUpperCase()
+                            font.pixelSize: Theme.fontSizeMedium
+                            font.weight: Font.Bold
+                            font.letterSpacing: 0.6
+                            color: Theme.surfaceText
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                    }
+
+                    StyledText {
+                        anchors.right: parent.right
+                        anchors.verticalCenter: nameRow.verticalCenter
+                        text: view.place.next ? view.place.clockText(view.place.next.at) : ""
+                        font.pixelSize: Theme.fontSizeMedium
+                        font.weight: Font.Medium
+                        color: Theme.surfaceVariantText
+                    }
+                }
+
+                StyledText {
+                    text: view.place.next ? ("in " + root.formatSplit(view.place.nextTotalSeconds)) : "—"
+                    font.pixelSize: Theme.fontSizeLarge + 8
+                    font.weight: Font.Bold
+                    color: Theme.surfaceText
+                }
+            }
+        }
+
+        // --- How far through the current window ---
+        // Linear, bounded and captioned. The caption is the whole point: an
+        // unlabelled bar is a puzzle, a labelled one is an instrument.
+        Column {
+            width: view.width
+            spacing: 4
+            visible: view.place.located
+
+            Item {
+                width: parent.width
+                height: 12
+
+                StyledText {
+                    id: spanFrom
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: view.place.activeSpan ? view.place.clockText(view.place.activeSpan.start) : ""
+                    font.pixelSize: Theme.fontSizeSmall - 1
+                    color: Theme.surfaceVariantText
+                }
+
+                StyledText {
+                    id: spanTo
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: view.place.activeSpan ? view.place.clockText(view.place.activeSpan.end) : ""
+                    font.pixelSize: Theme.fontSizeSmall - 1
+                    color: Theme.surfaceVariantText
+                }
+
+                Rectangle {
+                    anchors.left: spanFrom.right
+                    anchors.right: spanTo.left
+                    anchors.leftMargin: Theme.spacingS
+                    anchors.rightMargin: Theme.spacingS
+                    anchors.verticalCenter: parent.verticalCenter
+                    height: 6
+                    radius: 3
+                    color: Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g,
+                                   Theme.surfaceText.b, 0.10)
+
+                    Rectangle {
+                        height: parent.height
+                        radius: parent.radius
+                        width: Math.min(1, view.place.spanProgress) * parent.width
+                        color: view.place.isUrgent ? Theme.error : Theme.primary
+
+                        Behavior on width { NumberAnimation { duration: 500; easing.type: Easing.OutCubic } }
+                        Behavior on color { ColorAnimation { duration: 400 } }
+                    }
+                }
+            }
+
+            // What is open and how much of it is left. How long ago it began
+            // is the one number here nobody acts on.
+            StyledText {
+                width: parent.width
+                horizontalAlignment: Text.AlignHCenter
+                text: {
+                    var w = view.place.activeSpan
+                    if (!w) return ""
+                    if (w.gap) return "No prayer due"
+                    return w.name + "  ·  " + root.formatSplit(view.place.spanRemainingSec) + " remaining"
+                }
+                font.pixelSize: Theme.fontSizeSmall
+                font.weight: view.place.isUrgent ? Font.Medium : Font.Normal
+                color: view.place.isUrgent ? Theme.error : Theme.surfaceVariantText
+
+                Behavior on color { ColorAnimation { duration: 400 } }
+            }
+        }
+
+        // --- Where the sun is ---
+        SunPath {
+            place: view.place
+            width: view.width
+            height: 104
+            visible: view.place.sunSamples.length > 0
+        }
+
+        Rectangle {
+            width: view.width
+            height: 1
+            visible: view.place.located
+            color: Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.08)
+        }
+
+        // --- Column header ---
+        Item {
+            width: view.width
+            height: 16
+            visible: view.place.located
+
+            StyledText {
+                anchors.right: parent.right
+                anchors.rightMargin: 84
+                anchors.verticalCenter: parent.verticalCenter
+                text: "opens"
+                font.pixelSize: Theme.fontSizeSmall - 2
+                color: Theme.surfaceVariantText
+                opacity: 0.6
+            }
+
+            StyledText {
+                anchors.right: parent.right
+                anchors.rightMargin: 12
+                anchors.verticalCenter: parent.verticalCenter
+                text: "closes"
+                font.pixelSize: Theme.fontSizeSmall - 2
+                color: Theme.surfaceVariantText
+                opacity: 0.6
+            }
+        }
+
+        // --- The whole day ---
+        Repeater {
+            model: view.place.rows
+
+            delegate: Item {
+                required property var modelData
+                width: view.width
+                height: modelData.marker ? 24 : 30
+
+                // Already over. Every row is an instant, so Isha's close and
+                // Islamic midnight, which land after 00:00, need no special case.
+                readonly property bool isPast: (modelData.end !== null ? modelData.end : modelData.start)
+                                               <= view.place.now
+
+                // Matched by instant rather than by name: after Isha the next
+                // prayer is tomorrow's Fajr, and this morning's Fajr row must
+                // not claim it.
+                readonly property bool isNext: !modelData.marker && view.place.next !== null
+                                               && modelData.start === view.place.next.at
+                readonly property bool isCurr: !modelData.marker && view.place.currentWindow !== null
+                                               && modelData.start === view.place.currentWindow.start
+
+                // State lives in the row's fill and weight; identity lives in
+                // the dot's colour. Two channels, never mixed. Only what is open
+                // gets a fill. What is next is said in words, so two rows are
+                // never lit at once.
+                Rectangle {
+                    anchors.fill: parent
+                    anchors.topMargin: 1
+                    anchors.bottomMargin: 1
+                    radius: height / 2
+                    color: parent.isCurr
+                           ? Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.14)
+                           : "transparent"
+                }
+
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.leftMargin: 12
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: modelData.marker ? 4 : 7
+                    height: width
+                    radius: width / 2
+                    color: view.place.prayerColor(modelData.label)
+                    opacity: parent.isPast ? 0.4 : 1
+                }
+
+                Row {
+                    anchors.left: parent.left
+                    anchors.leftMargin: modelData.marker ? 30 : 28
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 5
+
+                    StyledText {
+                        text: modelData.label
+                        font.pixelSize: modelData.marker ? Theme.fontSizeSmall : Theme.fontSizeMedium
+                        font.weight: isCurr ? Font.Bold : Font.Normal
+                        font.italic: modelData.marker
+                        color: Theme.surfaceText
+                        opacity: isPast ? 0.42 : (modelData.marker ? 0.75 : 1)
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    StyledText {
+                        visible: isNext
+                        text: "upcoming"
+                        font.pixelSize: Theme.fontSizeSmall - 2
+                        font.italic: true
+                        color: Theme.surfaceVariantText
+                        opacity: 0.8
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+
+                // Two right-aligned columns. The headers name them, so no arrow
+                // is needed in seven consecutive rows.
+                StyledText {
+                    visible: !modelData.marker
+                    anchors.right: parent.right
+                    anchors.rightMargin: 84
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: view.place.clockText(modelData.start)
+                    font.pixelSize: Theme.fontSizeSmall
+                    font.weight: isCurr ? Font.Bold : Font.Normal
+                    color: Theme.surfaceText
+                    opacity: isPast ? 0.42 : 1
+                }
+
+                StyledText {
+                    visible: !modelData.marker
+                    anchors.right: parent.right
+                    anchors.rightMargin: 12
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: modelData.end !== null ? view.place.clockText(modelData.end) : ""
+                    font.pixelSize: Theme.fontSizeSmall
+                    font.weight: isCurr ? Font.Bold : Font.Normal
+                    color: Theme.surfaceText
+                    opacity: isPast ? 0.36 : 0.85
+                }
+
+                // Sunrise and Islamic midnight open and close nothing, so their
+                // single time sits centred across both columns rather than
+                // pretending to be an opening time.
+                StyledText {
+                    visible: modelData.marker
+                    x: parent.width - 122 + (110 - width) / 2
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: view.place.clockText(modelData.start)
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: Theme.surfaceText
+                    opacity: isPast ? 0.36 : 0.75
+                }
+            }
+        }
+
+        // --- What all of this is computed for ---
+        // A footer rather than a header: it is checked occasionally, not
+        // watched, so it should not compete with the countdown.
+        Item {
+            width: view.width
+            height: 22
+            visible: view.place.located
+
+            DIcon {
+                id: placePin
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                name: "location_on"
+                size: Theme.fontSizeSmall + 3
+                color: Theme.surfaceVariantText
+                opacity: 0.7
+            }
+
+            // Anchored between the pin and the coordinates rather than laid out
+            // in a row, so a long name elides instead of running underneath the
+            // numbers on the right.
+            StyledText {
+                anchors.left: placePin.right
+                anchors.leftMargin: Theme.spacingXS
+                anchors.right: placeCoords.left
+                anchors.rightMargin: Theme.spacingS
+                anchors.verticalCenter: parent.verticalCenter
+                text: view.place.label !== "" ? view.place.label
+                                              : root.coordText(view.place.lat, view.place.lon)
+                font.pixelSize: Theme.fontSizeSmall
+                color: Theme.surfaceVariantText
+                elide: Text.ElideRight
+            }
+
+            // The numbers stay on show beside a name: the name is the readable
+            // label, the coordinates are what is actually used.
+            StyledText {
+                id: placeCoords
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                visible: view.place.label !== ""
+                width: visible ? implicitWidth : 0
+                text: root.coordText(view.place.lat, view.place.lon)
+                font.pixelSize: Theme.fontSizeSmall - 1
+                color: Theme.surfaceVariantText
+                opacity: 0.65
             }
         }
     }
@@ -831,6 +1154,8 @@ PluginComponent {
             width: 320
             implicitWidth: 320
             implicitHeight: content.implicitHeight + Theme.spacingM * 2
+
+            readonly property var shown: here
 
             Column {
                 id: content
@@ -850,11 +1175,12 @@ PluginComponent {
                         spacing: Theme.spacingXS
 
                         MoonPhase {
+                            place: popoutRoot.shown
                             anchors.verticalCenter: parent.verticalCenter
                         }
 
                         StyledText {
-                            text: root.hijriText
+                            text: popoutRoot.shown.hijriText
                             font.pixelSize: Theme.fontSizeMedium
                             font.weight: Font.DemiBold
                             color: Theme.surfaceText
@@ -870,12 +1196,12 @@ PluginComponent {
                         anchors.leftMargin: Theme.spacingS
                         anchors.baseline: hijriLabel.top
                         anchors.baselineOffset: hijriLabel.height / 2 + 4
-                        text: Math.round(root.moonLit * 100) + "%"
-                              + (root.moonTurning ? "" : (root.moonWaxes ? " \u2191" : " \u2193"))
+                        text: Math.round(popoutRoot.shown.moonLit * 100) + "%"
+                              + (popoutRoot.shown.moonTurning ? "" : (popoutRoot.shown.moonWaxes ? " ↑" : " ↓"))
                         font.pixelSize: Theme.fontSizeSmall - 1
                         color: Theme.surfaceVariantText
                         opacity: 0.75
-                        visible: width + hijriLabel.width + 40 < parent.width
+                        visible: popoutRoot.shown.hijriText !== "" && width + hijriLabel.width + 40 < parent.width
                     }
 
                     Rectangle {
@@ -902,415 +1228,14 @@ PluginComponent {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: root.recompute()
+                            onClicked: popoutRoot.shown.recompute()
                         }
                     }
                 }
 
-                // --- Nothing to compute from ---
-                Rectangle {
+                PlaceView {
                     width: content.width
-                    height: emptyCol.implicitHeight + Theme.spacingL * 2
-                    radius: 12
-                    visible: !root.located
-                    color: Theme.surfaceContainerHigh
-
-                    Column {
-                        id: emptyCol
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.verticalCenter: parent.verticalCenter
-                        anchors.leftMargin: Theme.spacingM
-                        anchors.rightMargin: Theme.spacingM
-                        spacing: Theme.spacingXS
-
-                        Row {
-                            spacing: Theme.spacingS
-
-                            DIcon {
-                                name: "location_off"
-                                size: Theme.iconSize - 4
-                                color: Theme.surfaceVariantText
-                                anchors.verticalCenter: parent.verticalCenter
-                            }
-
-                            StyledText {
-                                text: "No location set"
-                                font.pixelSize: Theme.fontSizeMedium
-                                font.weight: Font.Bold
-                                color: Theme.surfaceText
-                                anchors.verticalCenter: parent.verticalCenter
-                            }
-                        }
-
-                        StyledText {
-                            width: parent.width
-                            text: "Prayer times are computed from your coordinates. Set them in plugin settings, or search there for your town."
-                            font.pixelSize: Theme.fontSizeSmall
-                            color: Theme.surfaceVariantText
-                            wrapMode: Text.WordWrap
-                        }
-                    }
-                }
-
-                // --- What is next ---
-                // The panel's subject line. The first question anyone opens this
-                // for is which prayer is coming and when, so it is answered first,
-                // in the largest type, in a whole sentence.
-                Rectangle {
-                    width: content.width
-                    height: nextCol.implicitHeight + Theme.spacingM * 2
-                    radius: 12
-                    visible: root.located
-                    color: Theme.surfaceContainerHigh
-
-                    Column {
-                        id: nextCol
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.verticalCenter: parent.verticalCenter
-                        anchors.leftMargin: Theme.spacingM
-                        anchors.rightMargin: Theme.spacingM
-                        spacing: 6
-
-                        Item {
-                            width: parent.width
-                            height: nameRow.implicitHeight
-
-                            Row {
-                                id: nameRow
-                                anchors.left: parent.left
-                                spacing: Theme.spacingXS
-
-                                DIcon {
-                                    name: root.getPrayerIcon(root.nextName)
-                                    fill: root.getPrayerFill(root.nextName)
-                                    size: Theme.iconSize - 6
-                                    color: root.prayerColor(root.nextName)
-                                    anchors.verticalCenter: parent.verticalCenter
-                                }
-
-                                StyledText {
-                                    text: root.nextName.toUpperCase()
-                                    font.pixelSize: Theme.fontSizeMedium
-                                    font.weight: Font.Bold
-                                    font.letterSpacing: 0.6
-                                    color: Theme.surfaceText
-                                    anchors.verticalCenter: parent.verticalCenter
-                                }
-                            }
-
-                            StyledText {
-                                anchors.right: parent.right
-                                anchors.verticalCenter: nameRow.verticalCenter
-                                text: root.schedule.length > 0
-                                      ? root.formatTime(root.hhmm(root.nextAt)) : ""
-                                font.pixelSize: Theme.fontSizeMedium
-                                font.weight: Font.Medium
-                                color: Theme.surfaceVariantText
-                            }
-                        }
-
-                        StyledText {
-                            text: root.schedule.length > 0
-                                  ? ("in " + root.formatSplit(root.nextTotalSeconds)) : "—"
-                            font.pixelSize: Theme.fontSizeLarge + 8
-                            font.weight: Font.Bold
-                            color: Theme.surfaceText
-                        }
-
-                    }
-                }
-
-                // --- How far through the current window ---
-                // Linear, bounded and captioned. The caption is the whole point:
-                // an unlabelled bar is a puzzle, a labelled one is an instrument.
-                Column {
-                    width: content.width
-                    spacing: 4
-                    visible: root.located
-
-                    Item {
-                        width: parent.width
-                        height: 12
-
-                        StyledText {
-                            id: spanFrom
-                            anchors.left: parent.left
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: root.activeSpan ? root.formatTime(root.hhmm(root.activeSpan.start)) : ""
-                            font.pixelSize: Theme.fontSizeSmall - 1
-                            color: Theme.surfaceVariantText
-                        }
-
-                        StyledText {
-                            id: spanTo
-                            anchors.right: parent.right
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: root.activeSpan ? root.formatTime(root.hhmm(root.activeSpan.end)) : ""
-                            font.pixelSize: Theme.fontSizeSmall - 1
-                            color: Theme.surfaceVariantText
-                        }
-
-                        Rectangle {
-                            anchors.left: spanFrom.right
-                            anchors.right: spanTo.left
-                            anchors.leftMargin: Theme.spacingS
-                            anchors.rightMargin: Theme.spacingS
-                            anchors.verticalCenter: parent.verticalCenter
-                            height: 6
-                            radius: 3
-                            color: Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g,
-                                           Theme.surfaceText.b, 0.10)
-
-                            Rectangle {
-                                height: parent.height
-                                radius: parent.radius
-                                width: Math.min(1, root.spanProgress) * parent.width
-                                color: root.isUrgent ? Theme.error : Theme.primary
-
-                                Behavior on width { NumberAnimation { duration: 500; easing.type: Easing.OutCubic } }
-                                Behavior on color { ColorAnimation { duration: 400 } }
-                            }
-                        }
-                    }
-
-                    // What is open and how much of it is left. How long ago it
-                    // began is the one number here nobody acts on.
-                    StyledText {
-                        width: parent.width
-                        horizontalAlignment: Text.AlignHCenter
-                        text: {
-                            var w = root.activeSpan
-                            if (!w) return ""
-                            if (w.gap) return "No prayer due"
-                            return w.name + "  ·  " + root.formatSplit(root.spanRemainingSec) + " remaining"
-                        }
-                        font.pixelSize: Theme.fontSizeSmall
-                        font.weight: root.isUrgent ? Font.Medium : Font.Normal
-                        color: root.isUrgent ? Theme.error : Theme.surfaceVariantText
-
-                        Behavior on color { ColorAnimation { duration: 400 } }
-                    }
-                }
-
-                // --- Where the sun is ---
-                SunPath {
-                    width: content.width
-                    height: 104
-                    visible: root.sunSamples.length > 0
-                }
-
-                Rectangle {
-                    width: content.width
-                    height: 1
-                    visible: root.located
-                    color: Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.08)
-                }
-
-                // --- Column header ---
-                Item {
-                    width: content.width
-                    height: 16
-                    visible: root.located
-
-                    StyledText {
-                        anchors.right: parent.right
-                        anchors.rightMargin: 84
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: "opens"
-                        font.pixelSize: Theme.fontSizeSmall - 2
-                        color: Theme.surfaceVariantText
-                        opacity: 0.6
-                    }
-
-                    StyledText {
-                        anchors.right: parent.right
-                        anchors.rightMargin: 12
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: "closes"
-                        font.pixelSize: Theme.fontSizeSmall - 2
-                        color: Theme.surfaceVariantText
-                        opacity: 0.6
-                    }
-                }
-
-                // --- The whole day ---
-                Repeater {
-                    model: root.todayTimes ? [
-                        { label: "Fajr",             start: root.todayTimes.fajr,     end: root.todayTimes.sunrise, marker: false },
-                        { label: "sunrise",          start: root.todayTimes.sunrise,  end: null,                    marker: true  },
-                        { label: "Dhuhr",            start: root.todayTimes.dhuhr,    end: root.todayTimes.asr,     marker: false },
-                        { label: "Asr",              start: root.todayTimes.asr,      end: root.todayTimes.maghrib, marker: false },
-                        { label: "Maghrib",          start: root.todayTimes.maghrib,  end: root.todayTimes.isha,    marker: false },
-                        { label: "Isha",             start: root.todayTimes.isha,     end: root.todayTimes.midnight, marker: false },
-                        // Tonight's midpoint falls after 00:00, so it belongs to
-                        // tomorrow's clock rather than today's.
-                        { label: "Islamic midnight", start: root.todayTimes.midnight, end: null,                    marker: true, nextDay: true }
-                    ] : []
-
-                    delegate: Item {
-                        required property var modelData
-                        width: content.width
-                        height: modelData.marker ? 24 : 30
-
-                        // Already over. Anything landing after 00:00 -- Isha's
-                        // close, and Islamic midnight itself -- belongs to
-                        // tomorrow's clock and is placed there before comparing.
-                        readonly property bool isPast: {
-                            var e = modelData.end !== null ? modelData.end : modelData.start
-                            if (modelData.nextDay === true
-                                    || (modelData.end !== null && e < modelData.start))
-                                e += 24
-                            return root.nowHours() > e
-                        }
-
-                        readonly property bool isNext: !modelData.marker && modelData.label === root.nextName
-                        readonly property bool isCurr: !modelData.marker
-                                                       && root.currentWindow !== null
-                                                       && modelData.label === root.currentWindow.name
-                                                       && !isNext
-
-                        // State lives in the row's fill and weight; identity lives
-                        // in the dot's colour. Two channels, never mixed.
-                        // Only what is open gets a fill. What is next is said in
-                        // words, so two rows are never lit at once.
-                        Rectangle {
-                            anchors.fill: parent
-                            anchors.topMargin: 1
-                            anchors.bottomMargin: 1
-                            radius: height / 2
-                            color: parent.isCurr
-                                   ? Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.14)
-                                   : "transparent"
-                        }
-
-                        Rectangle {
-                            anchors.left: parent.left
-                            anchors.leftMargin: 12
-                            anchors.verticalCenter: parent.verticalCenter
-                            width: modelData.marker ? 4 : 7
-                            height: width
-                            radius: width / 2
-                            color: root.prayerColor(modelData.label)
-                            opacity: parent.isPast ? 0.4 : 1
-                        }
-
-                        Row {
-                            anchors.left: parent.left
-                            anchors.leftMargin: modelData.marker ? 30 : 28
-                            anchors.verticalCenter: parent.verticalCenter
-                            spacing: 5
-
-                            StyledText {
-                                text: modelData.label
-                                font.pixelSize: modelData.marker ? Theme.fontSizeSmall : Theme.fontSizeMedium
-                                font.weight: isCurr ? Font.Bold : Font.Normal
-                                font.italic: modelData.marker
-                                color: Theme.surfaceText
-                                opacity: isPast ? 0.42 : (modelData.marker ? 0.75 : 1)
-                                anchors.verticalCenter: parent.verticalCenter
-                            }
-
-                            StyledText {
-                                visible: isNext
-                                text: "upcoming"
-                                font.pixelSize: Theme.fontSizeSmall - 2
-                                font.italic: true
-                                color: Theme.surfaceVariantText
-                                opacity: 0.8
-                                anchors.verticalCenter: parent.verticalCenter
-                            }
-                        }
-
-                        // Two right-aligned columns. The headers name them, so no
-                        // arrow is needed in seven consecutive rows.
-                        StyledText {
-                            visible: !modelData.marker
-                            anchors.right: parent.right
-                            anchors.rightMargin: 84
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: root.formatTime(root.hhmm(modelData.start))
-                            font.pixelSize: Theme.fontSizeSmall
-                            font.weight: isCurr ? Font.Bold : Font.Normal
-                            color: Theme.surfaceText
-                            opacity: isPast ? 0.42 : 1
-                        }
-
-                        StyledText {
-                            visible: !modelData.marker
-                            anchors.right: parent.right
-                            anchors.rightMargin: 12
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: modelData.end !== null
-                                  ? root.formatTime(root.hhmm(modelData.end)) : ""
-                            font.pixelSize: Theme.fontSizeSmall
-                            font.weight: isCurr ? Font.Bold : Font.Normal
-                            color: Theme.surfaceText
-                            opacity: isPast ? 0.36 : 0.85
-                        }
-
-                        // Sunrise and Islamic midnight open and close nothing, so
-                        // their single time sits centred across both columns
-                        // rather than pretending to be an opening time.
-                        StyledText {
-                            visible: modelData.marker
-                            x: parent.width - 122 + (110 - width) / 2
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: root.formatTime(root.hhmm(modelData.start))
-                            font.pixelSize: Theme.fontSizeSmall
-                            color: Theme.surfaceText
-                            opacity: isPast ? 0.36 : 0.75
-                        }
-                    }
-                }
-
-                // --- What all of this is computed for ---
-                // A footer rather than a header: it is checked occasionally, not
-                // watched, so it should not compete with the countdown.
-                Item {
-                    width: content.width
-                    height: 22
-                    visible: root.located
-
-                    DIcon {
-                        id: placePin
-                        anchors.left: parent.left
-                        anchors.verticalCenter: parent.verticalCenter
-                        name: "location_on"
-                        size: Theme.fontSizeSmall + 3
-                        color: Theme.surfaceVariantText
-                        opacity: 0.7
-                    }
-
-                    // Anchored between the pin and the coordinates rather than
-                    // laid out in a row, so a long name elides instead of
-                    // running underneath the numbers on the right.
-                    StyledText {
-                        anchors.left: placePin.right
-                        anchors.leftMargin: Theme.spacingXS
-                        anchors.right: placeCoords.left
-                        anchors.rightMargin: Theme.spacingS
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: root.placeLabel !== "" ? root.placeLabel : root.coordText()
-                        font.pixelSize: Theme.fontSizeSmall
-                        color: Theme.surfaceVariantText
-                        elide: Text.ElideRight
-                    }
-
-                    // The numbers stay on show beside a name: the name is the
-                    // readable label, the coordinates are what is actually used.
-                    StyledText {
-                        id: placeCoords
-                        anchors.right: parent.right
-                        anchors.verticalCenter: parent.verticalCenter
-                        visible: root.placeLabel !== ""
-                        width: visible ? implicitWidth : 0
-                        text: root.coordText()
-                        font.pixelSize: Theme.fontSizeSmall - 1
-                        color: Theme.surfaceVariantText
-                        opacity: 0.65
-                    }
+                    place: popoutRoot.shown
                 }
             }
         }
@@ -1641,6 +1566,89 @@ PluginComponent {
         var h = Math.floor(t)
         var mn = Math.floor((t - h) * 60)
         return (h < 10 ? "0" : "") + h + ":" + (mn < 10 ? "0" : "") + mn
+    }
+
+    // === Timeline ===
+    // computeDay answers in wall-clock hours on one civil date at one UTC offset.
+    // Hours from different days, from either side of a daylight-saving change,
+    // or from two time zones cannot be compared by subtracting them -- a day
+    // with a DST change is 23 or 25 hours long, which put the overnight
+    // countdown an hour out on both transition days. So each event is pinned to
+    // the instant it names, in milliseconds since the epoch, and every ordering
+    // and duration is taken between instants.
+    function instantOf(year, month, day, hours, tzOffset) {
+        return Date.UTC(year, month - 1, day) + (hours - tzOffset) * 3600000
+    }
+
+    // A civil day's events as instants. Islamic midnight usually lands after
+    // 00:00, and then belongs to the night that follows the day's sunset.
+    function dayInstants(year, month, day, times, tzOffset) {
+        var out = {}
+        for (var k in times)
+            out[k] = instantOf(year, month, day, times[k], tzOffset)
+        if (times.midnight < 12)
+            out.midnight += 86400000
+        return out
+    }
+
+    // An instant read off a wall clock at the given UTC offset, in hours [0, 24).
+    function wallHours(ms, tzOffset) {
+        return fixHour(ms / 3600000 + tzOffset)
+    }
+
+    // How long each prayer may be prayed for. Most windows close when the next
+    // prayer opens; two do not. Fajr closes at sunrise rather than running on to
+    // Dhuhr, and Isha closes at Islamic midnight -- the middle of the night --
+    // rather than at the following dawn. Isha may still be prayed after that out
+    // of necessity, but its time has ended, so midnight is the limit shown.
+    //
+    // y and t are yesterday's and today's dayInstants. Yesterday's Isha is
+    // included because the small hours of today still belong to it.
+    function prayerWindows(y, t) {
+        return [
+            { name: "Isha",    start: y.isha,    end: y.midnight, endLabel: "Islamic midnight" },
+            { name: "Fajr",    start: t.fajr,    end: t.sunrise,  endLabel: "sunrise" },
+            { name: "Dhuhr",   start: t.dhuhr,   end: t.asr,      endLabel: "Asr" },
+            { name: "Asr",     start: t.asr,     end: t.maghrib,  endLabel: "Maghrib" },
+            { name: "Maghrib", start: t.maghrib, end: t.isha,     endLabel: "Isha" },
+            { name: "Isha",    start: t.isha,    end: t.midnight, endLabel: "Islamic midnight" }
+        ]
+    }
+
+    // The prayer starts spanning today, closing with tomorrow's Fajr so the
+    // Isha -> Fajr countdown crosses midnight cleanly.
+    function prayerSchedule(t, m) {
+        return [
+            { name: "Fajr",    at: t.fajr },
+            { name: "Dhuhr",   at: t.dhuhr },
+            { name: "Asr",     at: t.asr },
+            { name: "Maghrib", at: t.maghrib },
+            { name: "Isha",    at: t.isha },
+            { name: "Fajr",    at: m.fajr }
+        ]
+    }
+
+    // The stretch containing `now`: the window that is open, or -- between
+    // sunrise and Dhuhr, and between Islamic midnight and dawn -- the gap
+    // before the next one, so one bar and one countdown cover every moment of
+    // the day instead of the panel emptying out for hours at a time.
+    function spanAt(windows, now) {
+        for (var i = 0; i < windows.length; i++)
+            if (now >= windows[i].start && now < windows[i].end)
+                return windows[i]
+        for (var j = 0; j < windows.length - 1; j++)
+            if (now >= windows[j].end && now < windows[j + 1].start)
+                return { name: "", start: windows[j].end, end: windows[j + 1].start,
+                         endLabel: windows[j + 1].name, gap: true }
+        return null
+    }
+
+    // Index of the first prayer still to come, or -1.
+    function nextIndex(schedule, now) {
+        for (var i = 0; i < schedule.length; i++)
+            if (schedule[i].at > now)
+                return i
+        return -1
     }
 
     // ===== END CALC =====
