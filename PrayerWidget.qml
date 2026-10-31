@@ -386,6 +386,34 @@ PluginComponent {
             return sunPoint((root.minuteMs - root.instantOf(today.y, today.m, today.d, 0, today.tz)) / 3600000)
         }
 
+        // The night in thirds, by the same reckoning as Islamic midnight -- its
+        // halfway point -- so the two always agree: sunset to sunrise, or to
+        // dawn under the Jafari rule. `first` is when the first third ends,
+        // `last` when the last third begins. The night is the one under way,
+        // or tonight's once this morning's sunrise has passed.
+        readonly property var thirds: {
+            if (days.length !== 3) return null
+            var a = days[now < days[1].at.sunrise ? 0 : 1].at
+            var night = 2 * (a.midnight - a.sunset)
+            if (!(night > 0)) return null
+            return { first: a.sunset + night / 3, last: a.sunset + 2 * night / 3 }
+        }
+
+        // The thirds on the path, placed by the hour on today's clock as the
+        // prayers are.
+        readonly property var thirdMarks: {
+            if (!today || !thirds) return []
+            var base = root.instantOf(today.y, today.m, today.d, 0, today.tz)
+            var out = []
+            var list = [["first third", thirds.first], ["last third", thirds.last]]
+            for (var i = 0; i < list.length; i++) {
+                var h = (((list[i][1] - base) / 3600000) % 24 + 24) % 24
+                var pt = sunPoint(h)
+                out.push({ name: list[i][0], at: list[i][1], x: pt.x, z: pt.z })
+            }
+            return out
+        }
+
         // When a row's event next happens: later today, or tomorrow once
         // today's has begun. Yesterday, today and tomorrow are all computed,
         // so this is a lookup, never a calculation.
@@ -677,6 +705,24 @@ PluginComponent {
         readonly property int padX: 12
         readonly property int padY: 7
 
+        // The path's extent, mapping sky coordinates to pixels. Shared by the
+        // canvas and the labels laid over it, so both agree on where a point is.
+        readonly property var frame: {
+            var s = place.sunSamples
+            if (!s || s.length === 0) return null
+            var x0 = 9, x1 = -9, z0 = 9, z1 = -9
+            for (var i = 0; i < s.length; i++) {
+                if (s[i].x < x0) x0 = s[i].x
+                if (s[i].x > x1) x1 = s[i].x
+                if (s[i].z < z0) z0 = s[i].z
+                if (s[i].z > z1) z1 = s[i].z
+            }
+            if (x1 - x0 < 1e-6 || z1 - z0 < 1e-6) return null
+            return { x0: x0, x1: x1, z0: z0, z1: z1 }
+        }
+        function px(x) { return padX + (x - frame.x0) / (frame.x1 - frame.x0) * (width - 2 * padX) }
+        function py(z) { return padY + (frame.z1 - z) / (frame.z1 - frame.z0) * (height - 2 * padY) }
+
         function repaint() { skyCanvas.requestPaint() }
 
         Component.onCompleted: repaint()
@@ -688,6 +734,7 @@ PluginComponent {
             target: sky.place
             function onSunSamplesChanged() { sky.repaint() }
             function onSunNowChanged() { sky.repaint() }
+            function onThirdMarksChanged() { sky.repaint() }
         }
 
         Canvas {
@@ -700,23 +747,8 @@ PluginComponent {
                 ctx.reset()
 
                 var s = sky.place.sunSamples
-                if (!s || s.length === 0) return
-
-                var x0 = 9, x1 = -9, z0 = 9, z1 = -9
-                for (var i = 0; i < s.length; i++) {
-                    if (s[i].x < x0) x0 = s[i].x
-                    if (s[i].x > x1) x1 = s[i].x
-                    if (s[i].z < z0) z0 = s[i].z
-                    if (s[i].z > z1) z1 = s[i].z
-                }
-                if (x1 - x0 < 1e-6 || z1 - z0 < 1e-6) return
-
-                var px = function (x) {
-                    return sky.padX + (x - x0) / (x1 - x0) * (width - 2 * sky.padX)
-                }
-                var py = function (z) {
-                    return sky.padY + (z1 - z) / (z1 - z0) * (height - 2 * sky.padY)
-                }
+                if (!sky.frame) return
+                var px = sky.px, py = sky.py
                 var hz = py(0)
 
                 // Ground.
@@ -795,6 +827,23 @@ PluginComponent {
                     ctx.fill()
                 }
 
+                // The thirds of the night, hollow: they are divisions of time,
+                // not altitudes the sun reaches, so they take no sky colour.
+                var thirds = sky.place.thirdMarks
+                ctx.strokeStyle = Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g,
+                                          Theme.surfaceText.b, 0.6)
+                ctx.lineWidth = 1.4
+                for (var q = 0; q < thirds.length; q++) {
+                    var tx = px(thirds[q].x), ty = py(thirds[q].z)
+                    ctx.beginPath()
+                    ctx.arc(tx, ty, 4.4, 0, 2 * Math.PI)
+                    ctx.fillStyle = Theme.surfaceContainerHigh
+                    ctx.fill()
+                    ctx.beginPath()
+                    ctx.arc(tx, ty, 2.6, 0, 2 * Math.PI)
+                    ctx.stroke()
+                }
+
                 // Where the sun is now: filled by day, hollow by night.
                 var now = sky.place.sunNow
                 if (!now) return
@@ -829,8 +878,7 @@ PluginComponent {
                 opacity: 0.8
             }
             StyledText {
-                text: "sunrise" + (sky.place.today && !isNaN(sky.place.zoneOffset) && sky.place.showsOwnClock
-                                   ? "  \u00b7  " + sky.place.zoneClock(sky.place.today.at.sunrise) + " there" : "")
+                text: "sunrise"
                 font.pixelSize: Theme.fontSizeSmall - 2
                 color: Theme.surfaceVariantText
             }
@@ -843,17 +891,47 @@ PluginComponent {
 
             StyledText {
                 anchors.right: parent.right
-                text: sky.place.today ? sky.place.clockText(sky.place.today.at.maghrib) : ""
+                text: sky.place.today ? sky.place.clockText(sky.place.today.at.sunset) : ""
                 font.pixelSize: Theme.fontSizeSmall - 1
                 color: Theme.surfaceText
                 opacity: 0.8
             }
             StyledText {
                 anchors.right: parent.right
-                text: (sky.place.today && !isNaN(sky.place.zoneOffset) && sky.place.showsOwnClock
-                       ? sky.place.zoneClock(sky.place.today.at.maghrib) + " there  \u00b7  " : "") + "sunset"
+                text: "sunset"
                 font.pixelSize: Theme.fontSizeSmall - 2
                 color: Theme.surfaceVariantText
+            }
+        }
+
+        // The thirds' labels, in the empty middle of the ellipse: each set
+        // in from its mark toward the centre, on the side facing it.
+        Repeater {
+            model: sky.frame ? sky.place.thirdMarks : []
+
+            delegate: Row {
+                id: third
+                required property var modelData
+                readonly property real mx: sky.px(modelData.x)
+                readonly property real my: sky.py(modelData.z)
+                readonly property bool leftSide: mx < sky.px((sky.frame.x0 + sky.frame.x1) / 2)
+                spacing: 4
+                x: leftSide ? mx + 9 : mx - 9 - width
+                y: my - height / 2 - 6
+
+                StyledText {
+                    anchors.baseline: time.baseline
+                    text: third.modelData.name
+                    font.pixelSize: Theme.fontSizeSmall - 2
+                    color: Theme.surfaceVariantText
+                }
+                StyledText {
+                    id: time
+                    text: sky.place.clockText(third.modelData.at)
+                    font.pixelSize: Theme.fontSizeSmall - 1
+                    color: Theme.surfaceText
+                    opacity: 0.8
+                }
             }
         }
     }
