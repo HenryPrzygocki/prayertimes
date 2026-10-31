@@ -13,10 +13,14 @@ PluginSettings {
     // from "where am I", and even without one it resolves to the provider's
     // exchange -- measured 163 km out from here. A name search asks the question
     // actually being asked, and a VPN cannot affect the answer.
+    //
+    // Two locations can be searched for, so results and status belong to
+    // whichever search ran last; `searchTarget` says which ("main" or "sec").
     property var placeResults: []
     property bool searching: false
     property real searchStartedAt: 0
     property string searchStatus: ""
+    property string searchTarget: "main"
 
     function placeName(parts) {
         var out = []
@@ -25,8 +29,9 @@ PluginSettings {
         return out.join(", ")
     }
 
-    function searchPlace(query) {
+    function searchPlace(query, target) {
         var q = String(query).trim()
+        root.searchTarget = target
         root.placeResults = []
         if (q.length < 2) {
             root.searchStatus = ""
@@ -57,6 +62,7 @@ PluginSettings {
                         continue
                     found.push({ label: root.placeName([h.name, h.admin1, h.country]),
                                  lat: h.latitude, lon: h.longitude,
+                                 timezone: h.timezone || "",
                                  population: h.population || 0 })
                 }
             } catch (e) {
@@ -84,6 +90,7 @@ PluginSettings {
         var lat = parseFloat(String(root.loadValue("lat", "")).trim())
         var lon = parseFloat(String(root.loadValue("lon", "")).trim())
         if (isNaN(lat) || isNaN(lon)) {
+            root.searchTarget = "main"
             root.searchStatus = "Set coordinates first."
             return
         }
@@ -92,6 +99,7 @@ PluginSettings {
             return
         root.naming = true
         root.nameStartedAt = now
+        root.searchTarget = "main"
         root.searchStatus = ""
 
         var xhr = new XMLHttpRequest()
@@ -124,19 +132,149 @@ PluginSettings {
         xhr.send()
     }
 
-    function applyPlace(place) {
+    function applyPlace(place, target) {
+        // The second location's keys carry a prefix; otherwise the two are
+        // stored the same way.
+        var k = target === "sec"
+              ? { lat: "secLat", lon: "secLon", label: "secLabel", pLat: "secPlaceLat", pLon: "secPlaceLon" }
+              : { lat: "lat", lon: "lon", label: "placeLabel", pLat: "placeLat", pLon: "placeLon" }
         // Four decimals is about eleven metres, far finer than any prayer time
         // resolves to.
-        root.saveValue("lat", place.lat.toFixed(4))
-        root.saveValue("lon", place.lon.toFixed(4))
+        root.saveValue(k.lat, place.lat.toFixed(4))
+        root.saveValue(k.lon, place.lon.toFixed(4))
         // The name is kept beside the coordinates it describes, so the widget can
-        // tell whether it still describes them -- see placeLabel there.
-        root.saveValue("placeLabel", place.label)
-        root.saveValue("placeLat", place.lat.toFixed(4))
-        root.saveValue("placeLon", place.lon.toFixed(4))
+        // tell whether it still describes them -- see labelFor there.
+        root.saveValue(k.label, place.label)
+        root.saveValue(k.pLat, place.lat.toFixed(4))
+        root.saveValue(k.pLon, place.lon.toFixed(4))
+        // The main location keeps the system's clock. The second has its own,
+        // and the directory knows which zone each town is in.
+        if (target === "sec")
+            root.saveValue("secZone", place.timezone)
         root.placeResults = []
         root.searchStatus = "Set to " + place.label + "  \u00b7  "
                           + place.lat.toFixed(4) + ", " + place.lon.toFixed(4)
+                          + (target === "sec" && place.timezone ? "  \u00b7  " + place.timezone : "")
+    }
+
+    function clearSecond() {
+        var keys = ["secLat", "secLon", "secLabel", "secPlaceLat", "secPlaceLon", "secZone"]
+        for (var i = 0; i < keys.length; i++)
+            root.saveValue(keys[i], "")
+        root.placeResults = []
+        root.searchTarget = "sec"
+        root.searchStatus = "Second location removed."
+    }
+
+    // Shared by both locations' cards, so the second can follow a different
+    // convention -- Makkah keeps Umm al-Qura wherever the reader lives.
+    readonly property var methodOptions: [
+        { label: "Jafari / Shia Ithna-Ashari", value: "0" },
+        { label: "University of Islamic Sciences, Karachi", value: "1" },
+        { label: "Islamic Society of North America", value: "2" },
+        { label: "Muslim World League", value: "3" },
+        { label: "Umm Al-Qura University, Makkah", value: "4" },
+        { label: "Egyptian General Authority of Survey", value: "5" },
+        { label: "Institute of Geophysics, University of Tehran", value: "7" },
+        { label: "Gulf Region", value: "8" },
+        { label: "Kuwait", value: "9" },
+        { label: "Qatar", value: "10" },
+        { label: "Majlis Ugama Islam Singapura, Singapore", value: "11" },
+        { label: "Union Organization islamic de France", value: "12" },
+        { label: "Diyanet İşleri Başkanlığı, Turkey", value: "13" },
+        { label: "Spiritual Administration of Muslims of Russia", value: "14" },
+        { label: "Dubai (experimental)", value: "16" },
+        { label: "JAKIM, Malaysia", value: "17" },
+        { label: "Tunisia", value: "18" },
+        { label: "Algeria", value: "19" },
+        { label: "KEMENAG, Indonesia", value: "20" },
+        { label: "Morocco", value: "21" },
+        { label: "Comunidade Islamica de Lisboa", value: "22" },
+        { label: "Ministry of Awqaf, Jordan", value: "23" }
+    ]
+
+    // A search box with its status line and its list of matches. The list
+    // and status show only under the box that ran the search.
+    component PlaceSearch: Column {
+        id: search
+        required property string target
+        property string hint: ""
+        width: parent.width
+        spacing: Theme.spacingXS
+
+        DTextField {
+            id: field
+            width: parent.width
+            placeholderText: root.searching && root.searchTarget === search.target
+                             ? "Searching…" : "Town or city, then Enter"
+            onAccepted: root.searchPlace(field.text, search.target)
+        }
+
+        StyledText {
+            width: parent.width
+            visible: root.searchTarget === search.target && root.searchStatus !== ""
+            text: root.searchStatus
+            font.pixelSize: Theme.fontSizeSmall
+            color: Theme.surfaceText
+            wrapMode: Text.WordWrap
+        }
+
+        Repeater {
+            model: root.searchTarget === search.target ? root.placeResults : []
+
+            delegate: StyledRect {
+                required property var modelData
+                width: field.width
+                height: 38
+                radius: Theme.cornerRadius
+                color: hitArea.containsMouse
+                       ? Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.18)
+                       : Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.06)
+
+                StyledText {
+                    anchors.left: parent.left
+                    anchors.leftMargin: Theme.spacingM
+                    anchors.right: coords.left
+                    anchors.rightMargin: Theme.spacingS
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: modelData.label
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: Theme.surfaceText
+                    elide: Text.ElideRight
+                }
+
+                // The second location's zone is what decides its clock, so
+                // its matches show the zone in place of the coordinates.
+                StyledText {
+                    id: coords
+                    anchors.right: parent.right
+                    anchors.rightMargin: Theme.spacingM
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: search.target === "sec" && modelData.timezone
+                          ? modelData.timezone
+                          : modelData.lat.toFixed(2) + ", " + modelData.lon.toFixed(2)
+                    font.pixelSize: Theme.fontSizeSmall - 1
+                    color: Theme.surfaceVariantText
+                }
+
+                MouseArea {
+                    id: hitArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.applyPlace(modelData, search.target)
+                }
+            }
+        }
+
+        StyledText {
+            width: parent.width
+            visible: search.hint !== ""
+            text: search.hint
+            font.pixelSize: Theme.fontSizeSmall
+            color: Theme.surfaceVariantText
+            wrapMode: Text.WordWrap
+        }
     }
 
     StyledText {
@@ -199,64 +337,8 @@ PluginSettings {
                     color: Theme.surfaceVariantText
                 }
 
-                DTextField {
-                    id: placeField
-                    width: parent.width
-                    placeholderText: root.searching ? "Searching…" : "Town or city, then Enter"
-                    onAccepted: root.searchPlace(text)
-                }
-
-                StyledText {
-                    width: parent.width
-                    visible: root.searchStatus !== ""
-                    text: root.searchStatus
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: Theme.surfaceText
-                    wrapMode: Text.WordWrap
-                }
-
-                Repeater {
-                    model: root.placeResults
-
-                    delegate: StyledRect {
-                        required property var modelData
-                        width: placeField.width
-                        height: 38
-                        radius: Theme.cornerRadius
-                        color: hitArea.containsMouse
-                               ? Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.18)
-                               : Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.06)
-
-                        StyledText {
-                            anchors.left: parent.left
-                            anchors.leftMargin: Theme.spacingM
-                            anchors.right: coords.left
-                            anchors.rightMargin: Theme.spacingS
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: modelData.label
-                            font.pixelSize: Theme.fontSizeSmall
-                            color: Theme.surfaceText
-                            elide: Text.ElideRight
-                        }
-
-                        StyledText {
-                            id: coords
-                            anchors.right: parent.right
-                            anchors.rightMargin: Theme.spacingM
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: modelData.lat.toFixed(2) + ", " + modelData.lon.toFixed(2)
-                            font.pixelSize: Theme.fontSizeSmall - 1
-                            color: Theme.surfaceVariantText
-                        }
-
-                        MouseArea {
-                            id: hitArea
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root.applyPlace(modelData)
-                        }
-                    }
+                PlaceSearch {
+                    target: "main"
                 }
 
                 StyledRect {
@@ -298,6 +380,93 @@ PluginSettings {
 
     StyledRect {
         width: parent.width
+        height: secondColumn.implicitHeight + Theme.spacingL * 2
+        radius: Theme.cornerRadius
+        color: Theme.surfaceContainerHigh
+
+        Column {
+            id: secondColumn
+            anchors.fill: parent
+            anchors.margins: Theme.spacingL
+            spacing: Theme.spacingM
+
+            StyledText {
+                text: "Second location"
+                font.pixelSize: Theme.fontSizeMedium
+                font.weight: Font.Medium
+                color: Theme.surfaceText
+            }
+
+            StyledText {
+                width: parent.width
+                text: "Somewhere else to keep an eye on — family, or a trip. It gets its own tab in the popout, with its prayer times on its own clock and on yours. The bar keeps following the main location."
+                font.pixelSize: Theme.fontSizeSmall
+                color: Theme.surfaceVariantText
+                wrapMode: Text.WordWrap
+            }
+
+            PlaceSearch {
+                target: "sec"
+                hint: "Picking a match fills in the coordinates and time zone below."
+            }
+
+            StringSetting {
+                settingKey: "secLat"
+                label: "Latitude"
+                defaultValue: ""
+            }
+
+            StringSetting {
+                settingKey: "secLon"
+                label: "Longitude"
+                defaultValue: ""
+            }
+
+            StringSetting {
+                settingKey: "secZone"
+                label: "Time Zone"
+                description: "An IANA name such as Asia/Riyadh or Europe/Istanbul, not a UTC offset, so daylight saving is followed there as it changes."
+                placeholder: "Area/City"
+                defaultValue: ""
+            }
+
+            SelectionSetting {
+                settingKey: "secMethod"
+                label: "Calculation Method"
+                description: "The convention followed there, which need not be yours."
+                options: [{ label: "Same as main location", value: "same" }].concat(root.methodOptions)
+                defaultValue: "same"
+            }
+
+            StyledRect {
+                width: parent.width
+                height: 34
+                radius: Theme.cornerRadius
+                color: clearArea.containsMouse
+                       ? Qt.rgba(Theme.error.r, Theme.error.g, Theme.error.b, 0.16)
+                       : Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.08)
+
+                StyledText {
+                    anchors.centerIn: parent
+                    text: "Remove second location"
+                    font.pixelSize: Theme.fontSizeSmall
+                    font.weight: Font.Medium
+                    color: clearArea.containsMouse ? Theme.error : Theme.surfaceText
+                }
+
+                MouseArea {
+                    id: clearArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.clearSecond()
+                }
+            }
+        }
+    }
+
+    StyledRect {
+        width: parent.width
         height: calcColumn.implicitHeight + Theme.spacingL * 2
         radius: Theme.cornerRadius
         color: Theme.surfaceContainerHigh
@@ -319,30 +488,7 @@ PluginSettings {
                 settingKey: "method"
                 label: "Calculation Method"
                 description: "Twilight angles defining dawn and nightfall. These are conventions, not physics -- pick the one your local mosque follows."
-                options: [
-                    { label: "Jafari / Shia Ithna-Ashari", value: "0" },
-                    { label: "University of Islamic Sciences, Karachi", value: "1" },
-                    { label: "Islamic Society of North America", value: "2" },
-                    { label: "Muslim World League", value: "3" },
-                    { label: "Umm Al-Qura University, Makkah", value: "4" },
-                    { label: "Egyptian General Authority of Survey", value: "5" },
-                    { label: "Institute of Geophysics, University of Tehran", value: "7" },
-                    { label: "Gulf Region", value: "8" },
-                    { label: "Kuwait", value: "9" },
-                    { label: "Qatar", value: "10" },
-                    { label: "Majlis Ugama Islam Singapura, Singapore", value: "11" },
-                    { label: "Union Organization islamic de France", value: "12" },
-                    { label: "Diyanet İşleri Başkanlığı, Turkey", value: "13" },
-                    { label: "Spiritual Administration of Muslims of Russia", value: "14" },
-                    { label: "Dubai (experimental)", value: "16" },
-                    { label: "JAKIM, Malaysia", value: "17" },
-                    { label: "Tunisia", value: "18" },
-                    { label: "Algeria", value: "19" },
-                    { label: "KEMENAG, Indonesia", value: "20" },
-                    { label: "Morocco", value: "21" },
-                    { label: "Comunidade Islamica de Lisboa", value: "22" },
-                    { label: "Ministry of Awqaf, Jordan", value: "23" }
-                ]
+                options: root.methodOptions
                 defaultValue: "2"
             }
 
