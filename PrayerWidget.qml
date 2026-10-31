@@ -116,7 +116,12 @@ PluginComponent {
         // Fajr.
         property var days: []
         property string lastComputed: ""
-        property string hijriText: ""
+        // The Islamic day begins at Maghrib, not at midnight, so the Hijri date
+        // is that of the civil day after the last Maghrib to have happened
+        // here. Each place has its own Maghribs, so a second location turns
+        // its date at its own sunset, whatever our clock says.
+        readonly property string hijriText: days.length === 3
+            ? root.formatHijri(root.hijriAt(days, now, root.hijriOffset)) : ""
         property real moonFraction: 0
         property string moonName: ""
         property real moonLit: 0
@@ -184,7 +189,6 @@ PluginComponent {
             // coordinates used to point, under a card showing nothing.
             days = []
             lastComputed = ""
-            hijriText = ""
             moonName = ""
             sunSamples = []
             prayerAlt = ({})
@@ -302,7 +306,6 @@ PluginComponent {
             days = out
             var t = out[1]
             lastComputed = dateKey([t.y, t.m, t.d])
-            hijriText = root.formatHijri(root.hijriDate(t.y, t.m, t.d, root.hijriOffset))
 
             // The arc and the moon are the parts that can be done without, so
             // they go last and behind a guard: whatever they may throw, the
@@ -1626,7 +1629,9 @@ PluginComponent {
             // Umm Al-Qura and the Gulf methods stretch the interval from 90 to 120
             // minutes throughout Ramadan.
             var mins = m.isha.minutes
-            if (m.isha.ramadanMinutes && hijriDate(year, month, day, opts.hijriOffset).month === 9)
+            // Isha falls after Maghrib, when the next Hijri day has begun: the
+            // eve of 1 Ramadan has the longer interval, the eve of Eid does not.
+            if (m.isha.ramadanMinutes && hijriDate(year, month, day + 1, opts.hijriOffset).month === 9)
                 mins = m.isha.ramadanMinutes
             times.isha = times.maghrib + mins / 60
         }
@@ -1761,6 +1766,19 @@ PluginComponent {
         var day = i - Math.floor((709 * month) / 24)
         var year = 30 * n + j - 30
         return { day: day, month: month, year: year, monthName: hijriMonths()[month - 1] }
+    }
+
+    // The Hijri date at an instant. The Islamic day begins at Maghrib, so it
+    // is the date of the civil day after the last Maghrib to have happened.
+    // `days` are consecutive civil days, each { y, m, d, at } with at.maghrib
+    // an instant; julianDay is linear in the day, so d + 1 may run past the
+    // month's end.
+    function hijriAt(days, now, dayOffset) {
+        var last = -1
+        for (var i = 0; i < days.length; i++)
+            if (days[i].at.maghrib <= now) last = i
+        var d = days[Math.max(0, last)]
+        return hijriDate(d.y, d.m, d.d + (last < 0 ? 0 : 1), dayOffset)
     }
 
     function formatHijri(h) {

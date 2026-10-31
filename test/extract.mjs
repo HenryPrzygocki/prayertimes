@@ -30,7 +30,7 @@ export function loadCalc(qmlPath = path.join(here, "..", "PrayerWidget.qml")) {
                  "sunSkyPoint", "moonPhase", "moonPhaseName", "moonIllumination", "moonWaxing", "moonAtTurningPoint",
                  "methodTable", "sunPosition", "julianDay",
                  "instantOf", "dayInstants", "wallHours", "prayerWindows", "prayerSchedule",
-                 "spanAt", "nextIndex", "parseZoneTable", "zoneOffsetAt"]
+                 "spanAt", "nextIndex", "parseZoneTable", "zoneOffsetAt", "hijriAt"]
   new Function("e", body + "\n;Object.assign(e,{" + names.join(",") + "})")(exports)
   return exports
 }

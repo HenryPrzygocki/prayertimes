@@ -24,6 +24,8 @@ function day(c, y, m, d) {
   return { tz, times, at: C.dayInstants(y, m, d, times, tz) }
 }
 
+const ymd = (y, m, d) => ({ y, m, d })
+
 function shift(y, m, d, k) {
   const t = new Date(Date.UTC(y, m - 1, d + k))
   return [t.getUTCFullYear(), t.getUTCMonth() + 1, t.getUTCDate()]
@@ -70,6 +72,16 @@ for (const c of cities) {
     const s = C.prayerSchedule(T.at, M.at)
     const i = C.nextIndex(s, T.at.isha + 60000)
     check(i === 5 && s[i].at === M.at.fajr, `${tag} next after Isha is tomorrow's Fajr`)
+
+    // The Hijri date turns at Maghrib, not at midnight: a minute before it,
+    // today's date; a minute after, tomorrow's; and in the small hours, still
+    // the date that began at yesterday's Maghrib.
+    const D = [{ ...Y, ...ymd(...shift(y, m, d, -1)) }, { ...T, ...ymd(y, m, d) }, { ...M, ...ymd(...shift(y, m, d, 1)) }]
+    const hj = h => `${h.day}/${h.month}/${h.year}`
+    const today = hj(C.hijriDate(y, m, d, 0)), tomorrow = hj(C.hijriDate(...shift(y, m, d, 1), 0))
+    check(hj(C.hijriAt(D, T.at.maghrib - 60000, 0)) === today, `${tag} Hijri before Maghrib`)
+    check(hj(C.hijriAt(D, T.at.maghrib + 60000, 0)) === tomorrow, `${tag} Hijri after Maghrib`)
+    check(hj(C.hijriAt(D, (Y.at.maghrib + T.at.fajr) / 2, 0)) === today, `${tag} Hijri in the small hours`)
 
     // Viewing the same place from another zone -- which is how the second
     // location is computed, on the system's clock -- moves the clock, not the
