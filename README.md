@@ -9,12 +9,12 @@ prayer times, computed locally from the sun's position.
 
 - **No network.** Prayer times are a deterministic function of date, latitude and longitude, so
   they are calculated on this machine. Works offline, cannot be rate limited, and your
-  coordinates are never sent anywhere. The sole exception is the place search in settings, which
-  asks a directory for a named town's coordinates when you search for one, and can name the
-  coordinates you already have (which sends them to a reverse geocoder, and only when you press the
-  button). If you set a second location, the widget asks open-meteo once which time zone it is
-  in; the main location never leaves the machine. Both look up a place, never an IP, so they are unaffected by a
-  VPN — unlike IP geolocation, which resolves to the provider's exchange (163 km out when tested
+  coordinates are never sent anywhere. The network is used only to look places up: the search
+  in settings asks a directory for a named town's coordinates; the button beside it can name the
+  coordinates you already have (sending them to a reverse geocoder, and only when pressed); and if
+  you set a second location, the widget asks open-meteo once which time zone it is in. The main
+  location's coordinates never leave the machine unless you press that button. All of these look up
+  a place, never an IP, so they are unaffected by a VPN — unlike IP geolocation, which resolves to the provider's exchange (163 km out when tested
   here, enough to move every prayer by several minutes) and is not used.
 - **Prayers as windows, not instants.** Each prayer shows when it opens, when it closes, and how
   much of it is left. Most close as the next one opens; two do not. Fajr closes at sunrise rather
@@ -27,7 +27,8 @@ prayer times, computed locally from the sun's position.
   offset comes from the system's own tzdata, so a change in the rules there arrives with the next
   tzdata update rather than whenever a web service catches up. The bar keeps following the main
   location.
-- **Hijri date**, with an adjustment for calendars set by local moonsighting.
+- **Hijri date**, turning at Maghrib as the Islamic day does — at each place's own Maghrib —
+  with an adjustment for calendars set by local moonsighting.
 - 22 calculation methods, both Asr schools, angle-based high-latitude handling, and a polar clamp.
 
 ## Accuracy
@@ -43,6 +44,7 @@ cd test
 node fetchcache.mjs   # snapshot API responses
 node compare.mjs      # compare local computation against them
 node timeline.mjs     # windows and countdowns across DST changes and time zones (offline)
+node zones.mjs        # the second location's offset table against date(1) (offline)
 ```
 
 ## Requirements
@@ -50,8 +52,9 @@ node timeline.mjs     # windows and countdowns across DST changes and time zones
 DankMaterialShell (Dux Shell) ≥ 2.0. Version 3 of this plugin uses the `qs.DCommon.Widgets` set
 that 2.0 introduced; for an older shell, check out the `v2.1.0` tag.
 
-The `process` permission is used only to read a second location's UTC offset from the system's
-tzdata with `date(1)`. No other external tools.
+The `process` permission is used only to read a second location's offset changes from the
+system's tzdata with `zdump(8)`, once per place and then once every two years. No other external
+tools.
 
 ## Installation
 
@@ -66,7 +69,7 @@ Then enable it in *DMS Settings → Plugins* and add the widget to a DankBar sec
 
 Set your latitude and longitude, pick the calculation method your local mosque follows, and choose
 the Asr school. Everything else is display preference. A second location is optional; search for it
-and its coordinates and time zone are filled in together.
+and its coordinates are filled in. Its time zone is found on its own.
 
 Note that the calculation method is a *convention*, not a physical constant: methods differ only in
 which angle below the horizon counts as dawn and nightfall. The Asr school is the one setting that

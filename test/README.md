@@ -22,7 +22,8 @@ pinned to a real instant, the windows built from those, and the span and
 next-prayer lookups. Across 21 cities and both the US and EU daylight-saving
 transitions it checks that instants round-trip to the computed wall-clock
 times, that windows are ordered and leave no unaccounted minute, that the next
-prayer after Isha is tomorrow's Fajr, and that an event's instant does not
+prayer after Isha is tomorrow's Fajr, that the Hijri date turns at Maghrib
+rather than at midnight, and that an event's instant does not
 depend on the zone it is viewed from. Days inside the polar circles, where
 `computeDay` collapses sunrise or sunset onto noon, are skipped.
 
