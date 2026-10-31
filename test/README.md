@@ -14,6 +14,7 @@ node fetchcache.mjs   # snapshot API responses to apicache.json (slow, rate-limi
 node compare.mjs      # compare local computation against the snapshot
 node hijri.mjs        # score the tabular Hijri calendar against Aladhan's
 node timeline.mjs     # check the instant-based timeline (offline, no snapshot needed)
+node zones.mjs        # check the zone table read from zdump against date(1)
 ```
 
 `timeline.mjs` checks the layer the widget builds on `computeDay`: every event

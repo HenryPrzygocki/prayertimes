@@ -94,13 +94,14 @@ PluginComponent {
         property string method: "2"
 
         // Every place is computed on the system's clock. A place may also show
-        // the clock there, whose UTC offset is then looked up from its
-        // coordinates (see lookupOffset).
+        // the clock there, for which its zone's offsets are read once and
+        // then looked up (see readZone).
         property bool showsOwnClock: false
-        property real zoneOffset: NaN
-        property real zoneCheckedAt: 0
-        property bool zoneLoading: false
         property string zoneName: ""
+        property var zoneTable: null
+        property real zoneValidUntil: 0
+        property bool zoneLoading: false
+        readonly property real zoneOffset: root.zoneOffsetAt(zoneTable, now)
 
         // Out of range is treated as unset: a latitude of 95 is a typo, and
         // computing from it produced NaN times under a panel that looked live.
@@ -160,20 +161,15 @@ PluginComponent {
         }
 
         // A new place's clock is unknown until asked, not the old one's.
-        onLatChanged: { zoneName = ""; zoneOffset = NaN; refresh() }
-        onLonChanged: { zoneName = ""; zoneOffset = NaN; refresh() }
+        onLatChanged: { zoneName = ""; zoneTable = null; refresh() }
+        onLonChanged: { zoneName = ""; zoneTable = null; refresh() }
         onMethodChanged: refresh()
         Component.onCompleted: refresh()
 
         // Prayer times are a deterministic function of the date, so they only
         // need recomputing when the civil date rolls over -- not on a polling
         // interval.
-        onNowChanged: {
-            if (dateKey(civilDate(now)) !== lastComputed)
-                recompute()
-            else if (now - zoneCheckedAt > 3600000)
-                lookupOffset()
-        }
+        onNowChanged: if (dateKey(civilDate(now)) !== lastComputed) recompute()
 
         Timer {
             id: debounce
@@ -198,7 +194,10 @@ PluginComponent {
                 clear()
                 return
             }
-            lookupOffset()
+            // The zone's offsets are read once per place and cover two years;
+            // the daily recompute only re-reads them as that runs out.
+            if (showsOwnClock && !zoneLoading && (!zoneTable || now > zoneValidUntil))
+                readZone()
             var c = civilDate(now)
             var dates = [], offsets = []
             for (var k = -1; k <= 1; k++) {
@@ -212,50 +211,45 @@ PluginComponent {
         }
 
         // QML's Date knows only the system's zone, so the clock there takes two
-        // steps, split by how often each answer changes.
+        // steps, each answered by whatever is authoritative for it, and each
+        // done once per place -- never when the popout opens.
         //
         // Which zone a point is in is geography, and is asked of open-meteo
-        // once per place ("timezone=auto" answers for bare coordinates).
+        // ("timezone=auto" answers for bare coordinates).
         //
-        // What that zone's offset is, is politics: Morocco left +01 for +00 in
+        // What that zone's offsets are is politics: Morocco left +01 for +00 in
         // September 2026, and open-meteo's server still said +01 a month on.
-        // So the offset is never taken from the network. It is read from the
-        // system's own tzdata through date(1) -- the rules the package manager
-        // keeps current -- hourly, which also catches a daylight-saving change
-        // there within the hour. The zone name is passed as an argument, never
-        // spliced into the script, and must be a real TZif file, since glibc
-        // reads an unknown TZ as UTC without a word.
-        function lookupOffset() {
+        // So offsets never come from the network. They are read from the
+        // system's own tzdata, which the package manager keeps current, with
+        // zdump: every change from the start of this year to two years on, so
+        // daylight saving there is exact to the minute by lookup alone.
+        function readZone() {
             if (!showsOwnClock || !located) {
-                zoneOffset = NaN
+                zoneTable = null
                 return
             }
-            if (zoneLoading)
-                return
-            zoneCheckedAt = now
             if (zoneName === "") {
                 findZoneName()
                 return
             }
             var z = zoneName
-            var script = 'z=$0\n'
-                + 'case $z in ""|/*|*..*) exit 2;; esac\n'
-                + 'f="/usr/share/zoneinfo/$z"\n'
-                + '[ -f "$f" ] && [ "$(head -c 4 "$f")" = TZif ] || exit 2\n'
-                + 'TZ="$z" date +%z\n'
+            var y = new Date(now).getFullYear()
             zoneLoading = true
-            Proc.runCommand("prayerTimes.zone", ["sh", "-c", script, z], function (out, code) {
+            // An argument list, not a shell line: the name never meets sh.
+            Proc.runCommand("prayerTimes.zone", ["zdump", "-i", "-c", y + "," + (y + 2), z],
+                            function (out, code) {
                 zoneLoading = false
                 if (z !== zoneName)
                     return   // the place moved while this ran
-                var o = String(out || "").trim()
-                if (code === 0 && /^[+-]\d{4}$/.test(o)) {
-                    zoneOffset = (o[0] === "-" ? -1 : 1) * (Number(o.slice(1, 3)) + Number(o.slice(3, 5)) / 60)
+                var table = code === 0 ? root.parseZoneTable(out) : null
+                if (!table) {
+                    console.warn("prayerTimes: tzdata has no zone", z)
+                    zoneName = ""
+                    retry.restart()
                     return
                 }
-                console.warn("prayerTimes: tzdata has no zone", z)
-                zoneName = ""   // ask again which zone this is, in five minutes
-                zoneCheckedAt = now - 3300000
+                zoneTable = table
+                zoneValidUntil = Date.UTC(y + 2, 0, 1) - 30 * 86400000
             }, 0)
         }
 
@@ -268,7 +262,7 @@ PluginComponent {
                     return
                 zoneLoading = false
                 if (key !== lat.toFixed(4) + "," + lon.toFixed(4)) {
-                    lookupOffset()   // the place moved while this was out
+                    readZone()   // the place moved while this was out
                     return
                 }
                 var tz = ""
@@ -278,17 +272,22 @@ PluginComponent {
                 } catch (e) {}
                 if (tz !== "" && tz !== "GMT") {
                     zoneName = tz
-                    lookupOffset()
+                    readZone()
                     return
                 }
-                // A known offset is kept, and the next try comes in five
-                // minutes rather than an hour.
-                zoneCheckedAt = now - 3300000
                 console.warn("prayerTimes: no time zone found for", key, "- status", xhr.status)
+                retry.restart()
             }
             xhr.open("GET", "https://api.open-meteo.com/v1/forecast?forecast_days=1&timezone=auto"
                           + "&latitude=" + lat.toFixed(4) + "&longitude=" + lon.toFixed(4))
             xhr.send()
+        }
+
+        // Offline at startup, say: try again in five minutes, not at midnight.
+        Timer {
+            id: retry
+            interval: 300000
+            onTriggered: place.readZone()
         }
 
         function computeDays(dates, offsets) {
@@ -453,13 +452,15 @@ PluginComponent {
         // The same instant on the clock there, tagged against that clock's
         // today. Empty until the offset there is known.
         function zoneClock(ms) {
-            if (ms === null || ms === undefined || isNaN(ms) || isNaN(zoneOffset)) return ""
-            var shifted = function (t) {
-                var w = new Date(t + zoneOffset * 3600000)
+            if (ms === null || ms === undefined || isNaN(ms)) return ""
+            var off = root.zoneOffsetAt(zoneTable, ms)
+            if (isNaN(off)) return ""
+            var shifted = function (t, o) {
+                var w = new Date(t + o * 3600000)
                 return [w.getUTCFullYear(), w.getUTCMonth() + 1, w.getUTCDate()]
             }
-            return root.formatTime(root.toHHMM(root.wallHours(ms, zoneOffset)))
-                 + dayMark(shifted(ms), shifted(now))
+            return root.formatTime(root.toHHMM(root.wallHours(ms, off)))
+                 + dayMark(shifted(ms, off), shifted(now, zoneOffset))
         }
 
         function dayMark(day, today) {
@@ -1948,6 +1949,51 @@ PluginComponent {
                 return { name: "", start: windows[j].end, end: windows[j + 1].start,
                          endLabel: windows[j + 1].name, gap: true }
         return null
+    }
+
+    // === Another zone's clock ===
+    // `zdump -i` lists a zone's offset changes over a range of years, one per
+    // line: the local date and time just after the change, then the new
+    // offset ("2026-11-01  01  -06  CST", tab-separated). The first line, with dashes for date
+    // and time, is the offset in force as the range opens. Read once, this
+    // answers the offset at any instant in the range by lookup alone.
+    //
+    // Returns [{ from: ms, off: hours }] in order, or null if nothing usable.
+    function parseZoneTable(text) {
+        function hours(o) {
+            var m = /^([+-])(\d\d):?(\d\d)?:?(\d\d)?$/.exec(o)
+            if (!m) return NaN
+            return (m[1] === "-" ? -1 : 1) * (Number(m[2]) + Number(m[3] || 0) / 60
+                                               + Number(m[4] || 0) / 3600)
+        }
+        var out = []
+        var lines = String(text || "").split("\n")
+        for (var i = 0; i < lines.length; i++) {
+            var f = lines[i].split("\t")
+            if (f.length < 3) continue
+            var off = hours(f[2])
+            if (isNaN(off)) continue
+            if (f[0] === "-") {
+                out.push({ from: -Infinity, off: off })
+                continue
+            }
+            var d = /^(\d+)-(\d\d)-(\d\d)$/.exec(f[0])
+            var t = /^(\d\d):?(\d\d)?:?(\d\d)?$/.exec(f[1])   // "01", "0130" or "01:30"
+            if (!d || !t || out.length === 0) continue
+            // Local time after the change, so it is undone with the new offset.
+            var local = Date.UTC(Number(d[1]), Number(d[2]) - 1, Number(d[3]),
+                                 Number(t[1]), Number(t[2] || 0), Number(t[3] || 0))
+            out.push({ from: local - off * 3600000, off: off })
+        }
+        return out.length > 0 && out[0].from === -Infinity ? out : null
+    }
+
+    function zoneOffsetAt(table, ms) {
+        if (!table || isNaN(ms)) return NaN
+        var off = NaN
+        for (var i = 0; i < table.length && table[i].from <= ms; i++)
+            off = table[i].off
+        return off
     }
 
     // Index of the first prayer still to come, or -1.
