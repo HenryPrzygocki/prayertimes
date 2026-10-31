@@ -80,6 +80,9 @@ PluginComponent {
     }
 
     readonly property real nowMs: clock.date.getTime()
+    // The sun dot moves about a pixel a minute; redrawing the arc every second
+    // when seconds are shown would repaint the canvas for nothing.
+    readonly property real minuteMs: Math.floor(nowMs / 60000) * 60000
 
     // === A place ===
     // Everything derived from one set of coordinates: the three days of times
@@ -123,7 +126,6 @@ PluginComponent {
         readonly property string hijriText: days.length === 3
             ? root.formatHijri(root.hijriAt(days, now, root.hijriOffset)) : ""
         property real moonFraction: 0
-        property string moonName: ""
         property real moonLit: 0
         property bool moonWaxes: true
         property bool moonTurning: false
@@ -189,7 +191,6 @@ PluginComponent {
             // coordinates used to point, under a card showing nothing.
             days = []
             lastComputed = ""
-            moonName = ""
             sunSamples = []
             prayerAlt = ({})
         }
@@ -313,7 +314,6 @@ PluginComponent {
             // ornament cannot blank the panel.
             try {
                 moonFraction = root.moonPhase(t.y, t.m, t.d)
-                moonName = root.moonPhaseName(moonFraction)
                 moonLit = root.moonIllumination(moonFraction)
                 moonWaxes = root.moonWaxing(moonFraction)
                 moonTurning = root.moonAtTurningPoint(moonFraction)
@@ -322,7 +322,6 @@ PluginComponent {
             } catch (e) {
                 sunSamples = []
                 prayerAlt = ({})
-                moonName = ""
                 console.warn("prayerTimes: sun path unavailable —", e)
             }
         }
@@ -349,7 +348,7 @@ PluginComponent {
 
         function samplePrayerAltitudes() {
             var out = {}
-            var keys = { Fajr: "fajr", Sunrise: "sunrise", Dhuhr: "dhuhr", Asr: "asr",
+            var keys = { Fajr: "fajr", sunrise: "sunrise", Dhuhr: "dhuhr", Asr: "asr",
                          Maghrib: "maghrib", Isha: "isha", "Islamic midnight": "midnight" }
             for (var name in keys)
                 out[name] = sunPoint(today.times[keys[name]]).alt
@@ -384,7 +383,7 @@ PluginComponent {
         // day does not move the sun an hour off its true position.
         readonly property var sunNow: {
             if (!today) return null
-            return sunPoint((now - root.instantOf(today.y, today.m, today.d, 0, today.tz)) / 3600000)
+            return sunPoint((root.minuteMs - root.instantOf(today.y, today.m, today.d, 0, today.tz)) / 3600000)
         }
 
         // === The timeline ===
@@ -923,8 +922,8 @@ PluginComponent {
         }
     }
 
-    // Everything the popout says about one place, from the countdown down to
-    // the footer naming it.
+    // Everything the popout says about one place, from the sky down to the
+    // footer naming it.
     component PlaceView: Column {
         id: view
         required property var place
@@ -1237,7 +1236,7 @@ PluginComponent {
 
                 // --- What all of this is computed for ---
                 // A footer rather than a header: it is checked occasionally, not
-                // watched, so it should not compete with the countdown.
+                // watched, so it should not compete with the table.
                 Item {
                     width: dayCol.width
                     height: 22
@@ -1665,7 +1664,7 @@ PluginComponent {
         var night = (times.sunrise + 24) - times.sunset
         if (!isFinite(night)) return
 
-        function portion(angle, fraction) {
+        function portion(angle) {
             if (mode === "angle" && typeof angle === "number") return night / 60 * angle
             if (mode === "seventh") return night / 7
             return night / 2   // nightmiddle
@@ -1724,17 +1723,6 @@ PluginComponent {
 
     function moonAtTurningPoint(phase) {
         return phase < 0.02 || phase > 0.98 || (phase > 0.48 && phase < 0.52)
-    }
-
-    function moonPhaseName(phase) {
-        if (phase < 0.02 || phase > 0.98) return "New moon"
-        if (phase < 0.23) return "Waxing crescent"
-        if (phase < 0.27) return "First quarter"
-        if (phase < 0.48) return "Waxing gibbous"
-        if (phase < 0.52) return "Full moon"
-        if (phase < 0.73) return "Waning gibbous"
-        if (phase < 0.77) return "Last quarter"
-        return "Waning crescent"
     }
 
     // === Hijri calendar ===
@@ -1872,11 +1860,19 @@ PluginComponent {
         return null
     }
 
+    // Index of the first prayer still to come, or -1.
+    function nextIndex(schedule, now) {
+        for (var i = 0; i < schedule.length; i++)
+            if (schedule[i].at > now)
+                return i
+        return -1
+    }
+
     // === Another zone's clock ===
     // `zdump -i` lists a zone's offset changes over a range of years, one per
-    // line: the local date and time just after the change, then the new
-    // offset ("2026-11-01  01  -06  CST", tab-separated). The first line, with dashes for date
-    // and time, is the offset in force as the range opens. Read once, this
+    // line, tab-separated: the local date and time just after the change,
+    // then the new offset ("2026-11-01  01  -06  CST"). The first line, with
+    // dashes for date and time, is the offset in force as the range opens. Read once, this
     // answers the offset at any instant in the range by lookup alone.
     //
     // Returns [{ from: ms, off: hours }] in order, or null if nothing usable.
@@ -1915,14 +1911,6 @@ PluginComponent {
         for (var i = 0; i < table.length && table[i].from <= ms; i++)
             off = table[i].off
         return off
-    }
-
-    // Index of the first prayer still to come, or -1.
-    function nextIndex(schedule, now) {
-        for (var i = 0; i < schedule.length; i++)
-            if (schedule[i].at > now)
-                return i
-        return -1
     }
 
     // ===== END CALC =====

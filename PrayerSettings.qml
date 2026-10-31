@@ -149,7 +149,7 @@ PluginSettings {
         root.placeResults = []
         root.searchStatus = "Set to " + place.label + "  \u00b7  "
                           + place.lat.toFixed(4) + ", " + place.lon.toFixed(4)
-              }
+    }
 
     function clearSecond() {
         var keys = ["secLat", "secLon", "secLabel", "secPlaceLat", "secPlaceLon"]
@@ -277,7 +277,7 @@ PluginSettings {
 
     StyledText {
         width: parent.width
-        text: "Prayer times are computed on this machine from your coordinates. The network is only used when you search for a place by name."
+        text: "Prayer times are computed on this machine from your coordinates. The network is used only to look places up: searching by name, naming your coordinates, and finding the second location\u2019s time zone."
         font.pixelSize: Theme.fontSizeSmall
         color: Theme.surfaceVariantText
         wrapMode: Text.WordWrap

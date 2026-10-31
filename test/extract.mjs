@@ -27,7 +27,7 @@ export function loadCalc(qmlPath = path.join(here, "..", "PrayerWidget.qml")) {
 
   const exports = {}
   const names = ["computeDay", "toHHMM", "hijriDate", "formatHijri",
-                 "sunSkyPoint", "moonPhase", "moonPhaseName", "moonIllumination", "moonWaxing", "moonAtTurningPoint",
+                 "sunSkyPoint", "moonPhase", "moonIllumination", "moonWaxing", "moonAtTurningPoint",
                  "methodTable", "sunPosition", "julianDay",
                  "instantOf", "dayInstants", "wallHours", "prayerWindows", "prayerSchedule",
                  "spanAt", "nextIndex", "parseZoneTable", "zoneOffsetAt", "hijriAt"]
