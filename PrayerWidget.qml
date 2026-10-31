@@ -640,7 +640,6 @@ PluginComponent {
                 text: "sunrise"
                 font.pixelSize: Theme.fontSizeSmall - 2
                 color: Theme.surfaceVariantText
-                opacity: 0.6
             }
         }
 
@@ -661,7 +660,6 @@ PluginComponent {
                 text: "sunset"
                 font.pixelSize: Theme.fontSizeSmall - 2
                 color: Theme.surfaceVariantText
-                opacity: 0.6
             }
         }
     }
@@ -865,284 +863,304 @@ PluginComponent {
                     font.weight: Font.Bold
                     color: Theme.surfaceText
                 }
-            }
-        }
 
-        // --- How far through the current window ---
-        // Linear, bounded and captioned. The caption is the whole point: an
-        // unlabelled bar is a puzzle, a labelled one is an instrument.
-        Column {
-            width: view.width
-            spacing: 4
-            visible: view.place.located
+                // --- How far through the current window ---
+                // Linear, bounded and captioned. The caption is the whole point: an
+                // unlabelled bar is a puzzle, a labelled one is an instrument.
+                Column {
+                    width: parent.width
+                    spacing: 4
+                    topPadding: 2
 
-            Item {
-                width: parent.width
-                height: 12
+                    Item {
+                        width: parent.width
+                        height: 12
 
-                StyledText {
-                    id: spanFrom
-                    anchors.left: parent.left
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: view.place.activeSpan ? view.place.clockText(view.place.activeSpan.start) : ""
-                    font.pixelSize: Theme.fontSizeSmall - 1
-                    color: Theme.surfaceVariantText
-                }
+                        StyledText {
+                            id: spanFrom
+                            anchors.left: parent.left
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: view.place.activeSpan ? view.place.clockText(view.place.activeSpan.start) : ""
+                            font.pixelSize: Theme.fontSizeSmall - 1
+                            color: Theme.surfaceVariantText
+                        }
 
-                StyledText {
-                    id: spanTo
-                    anchors.right: parent.right
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: view.place.activeSpan ? view.place.clockText(view.place.activeSpan.end) : ""
-                    font.pixelSize: Theme.fontSizeSmall - 1
-                    color: Theme.surfaceVariantText
-                }
+                        StyledText {
+                            id: spanTo
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: view.place.activeSpan ? view.place.clockText(view.place.activeSpan.end) : ""
+                            font.pixelSize: Theme.fontSizeSmall - 1
+                            color: Theme.surfaceVariantText
+                        }
 
-                Rectangle {
-                    anchors.left: spanFrom.right
-                    anchors.right: spanTo.left
-                    anchors.leftMargin: Theme.spacingS
-                    anchors.rightMargin: Theme.spacingS
-                    anchors.verticalCenter: parent.verticalCenter
-                    height: 6
-                    radius: 3
-                    color: Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g,
-                                   Theme.surfaceText.b, 0.10)
+                        Rectangle {
+                            anchors.left: spanFrom.right
+                            anchors.right: spanTo.left
+                            anchors.leftMargin: Theme.spacingS
+                            anchors.rightMargin: Theme.spacingS
+                            anchors.verticalCenter: parent.verticalCenter
+                            height: 6
+                            radius: 3
+                            color: Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g,
+                                           Theme.surfaceText.b, 0.10)
 
-                    Rectangle {
-                        height: parent.height
-                        radius: parent.radius
-                        width: Math.min(1, view.place.spanProgress) * parent.width
-                        color: view.place.isUrgent ? Theme.error : Theme.primary
+                            Rectangle {
+                                height: parent.height
+                                radius: parent.radius
+                                width: Math.min(1, view.place.spanProgress) * parent.width
+                                color: view.place.isUrgent ? Theme.error : Theme.primary
 
-                        Behavior on width { NumberAnimation { duration: 500; easing.type: Easing.OutCubic } }
+                                Behavior on width { NumberAnimation { duration: 500; easing.type: Easing.OutCubic } }
+                                Behavior on color { ColorAnimation { duration: 400 } }
+                            }
+                        }
+                    }
+
+                    // What is open and how much of it is left. How long ago it began
+                    // is the one number here nobody acts on.
+                    StyledText {
+                        width: parent.width
+                        horizontalAlignment: Text.AlignHCenter
+                        text: {
+                            var w = view.place.activeSpan
+                            if (!w) return ""
+                            if (w.gap) return "No prayer due"
+                            return w.name + "  ·  " + root.formatSplit(view.place.spanRemainingSec) + " remaining"
+                        }
+                        font.pixelSize: Theme.fontSizeSmall
+                        font.weight: view.place.isUrgent ? Font.Medium : Font.Normal
+                        color: view.place.isUrgent ? Theme.error : Theme.surfaceVariantText
+
                         Behavior on color { ColorAnimation { duration: 400 } }
                     }
                 }
             }
-
-            // What is open and how much of it is left. How long ago it began
-            // is the one number here nobody acts on.
-            StyledText {
-                width: parent.width
-                horizontalAlignment: Text.AlignHCenter
-                text: {
-                    var w = view.place.activeSpan
-                    if (!w) return ""
-                    if (w.gap) return "No prayer due"
-                    return w.name + "  ·  " + root.formatSplit(view.place.spanRemainingSec) + " remaining"
-                }
-                font.pixelSize: Theme.fontSizeSmall
-                font.weight: view.place.isUrgent ? Font.Medium : Font.Normal
-                color: view.place.isUrgent ? Theme.error : Theme.surfaceVariantText
-
-                Behavior on color { ColorAnimation { duration: 400 } }
-            }
         }
 
-        // --- Where the sun is ---
-        SunPath {
-            place: view.place
-            width: view.width
-            height: 104
-            visible: view.place.sunSamples.length > 0
-        }
-
+        // --- The day ---
+        // On a card of its own for the same reason as the countdown: the
+        // popout's surface is translucent, and over a light wallpaper the
+        // secondary text washed out to nothing. A solid card keeps it legible
+        // whatever is behind the shell, and gives the arc's markers the
+        // background their rings are drawn to match.
         Rectangle {
             width: view.width
-            height: 1
+            height: dayCol.implicitHeight + Theme.spacingS * 2
+            radius: 12
             visible: view.place.located
-            color: Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.08)
-        }
+            color: Theme.surfaceContainerHigh
 
-        // --- Column header ---
-        Item {
-            width: view.width
-            height: 16
-            visible: view.place.located
-
-            StyledText {
-                anchors.right: parent.right
-                anchors.rightMargin: 84
-                anchors.verticalCenter: parent.verticalCenter
-                text: "opens"
-                font.pixelSize: Theme.fontSizeSmall - 2
-                color: Theme.surfaceVariantText
-                opacity: 0.6
-            }
-
-            StyledText {
-                anchors.right: parent.right
-                anchors.rightMargin: 12
-                anchors.verticalCenter: parent.verticalCenter
-                text: "closes"
-                font.pixelSize: Theme.fontSizeSmall - 2
-                color: Theme.surfaceVariantText
-                opacity: 0.6
-            }
-        }
-
-        // --- The whole day ---
-        Repeater {
-            model: view.place.rows
-
-            delegate: Item {
-                required property var modelData
-                width: view.width
-                height: modelData.marker ? 24 : 30
-
-                // Already over. Every row is an instant, so Isha's close and
-                // Islamic midnight, which land after 00:00, need no special case.
-                readonly property bool isPast: (modelData.end !== null ? modelData.end : modelData.start)
-                                               <= view.place.now
-
-                // Matched by instant rather than by name: after Isha the next
-                // prayer is tomorrow's Fajr, and this morning's Fajr row must
-                // not claim it.
-                readonly property bool isNext: !modelData.marker && view.place.next !== null
-                                               && modelData.start === view.place.next.at
-                readonly property bool isCurr: !modelData.marker && view.place.currentWindow !== null
-                                               && modelData.start === view.place.currentWindow.start
-
-                // State lives in the row's fill and weight; identity lives in
-                // the dot's colour. Two channels, never mixed. Only what is open
-                // gets a fill. What is next is said in words, so two rows are
-                // never lit at once.
-                Rectangle {
-                    anchors.fill: parent
-                    anchors.topMargin: 1
-                    anchors.bottomMargin: 1
-                    radius: height / 2
-                    color: parent.isCurr
-                           ? Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.14)
-                           : "transparent"
-                }
-
-                Rectangle {
-                    anchors.left: parent.left
-                    anchors.leftMargin: 12
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: modelData.marker ? 4 : 7
-                    height: width
-                    radius: width / 2
-                    color: view.place.prayerColor(modelData.label)
-                    opacity: parent.isPast ? 0.4 : 1
-                }
-
-                Row {
-                    anchors.left: parent.left
-                    anchors.leftMargin: modelData.marker ? 30 : 28
-                    anchors.verticalCenter: parent.verticalCenter
-                    spacing: 5
-
-                    StyledText {
-                        text: modelData.label
-                        font.pixelSize: modelData.marker ? Theme.fontSizeSmall : Theme.fontSizeMedium
-                        font.weight: isCurr ? Font.Bold : Font.Normal
-                        font.italic: modelData.marker
-                        color: Theme.surfaceText
-                        opacity: isPast ? 0.42 : (modelData.marker ? 0.75 : 1)
-                        anchors.verticalCenter: parent.verticalCenter
-                    }
-
-                    StyledText {
-                        visible: isNext
-                        text: "upcoming"
-                        font.pixelSize: Theme.fontSizeSmall - 2
-                        font.italic: true
-                        color: Theme.surfaceVariantText
-                        opacity: 0.8
-                        anchors.verticalCenter: parent.verticalCenter
-                    }
-                }
-
-                // Two right-aligned columns. The headers name them, so no arrow
-                // is needed in seven consecutive rows.
-                StyledText {
-                    visible: !modelData.marker
-                    anchors.right: parent.right
-                    anchors.rightMargin: 84
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: view.place.clockText(modelData.start)
-                    font.pixelSize: Theme.fontSizeSmall
-                    font.weight: isCurr ? Font.Bold : Font.Normal
-                    color: Theme.surfaceText
-                    opacity: isPast ? 0.42 : 1
-                }
-
-                StyledText {
-                    visible: !modelData.marker
-                    anchors.right: parent.right
-                    anchors.rightMargin: 12
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: modelData.end !== null ? view.place.clockText(modelData.end) : ""
-                    font.pixelSize: Theme.fontSizeSmall
-                    font.weight: isCurr ? Font.Bold : Font.Normal
-                    color: Theme.surfaceText
-                    opacity: isPast ? 0.36 : 0.85
-                }
-
-                // Sunrise and Islamic midnight open and close nothing, so their
-                // single time sits centred across both columns rather than
-                // pretending to be an opening time.
-                StyledText {
-                    visible: modelData.marker
-                    x: parent.width - 122 + (110 - width) / 2
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: view.place.clockText(modelData.start)
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: Theme.surfaceText
-                    opacity: isPast ? 0.36 : 0.75
-                }
-            }
-        }
-
-        // --- What all of this is computed for ---
-        // A footer rather than a header: it is checked occasionally, not
-        // watched, so it should not compete with the countdown.
-        Item {
-            width: view.width
-            height: 22
-            visible: view.place.located
-
-            DIcon {
-                id: placePin
+            Column {
+                id: dayCol
                 anchors.left: parent.left
-                anchors.verticalCenter: parent.verticalCenter
-                name: "location_on"
-                size: Theme.fontSizeSmall + 3
-                color: Theme.surfaceVariantText
-                opacity: 0.7
-            }
-
-            // Anchored between the pin and the coordinates rather than laid out
-            // in a row, so a long name elides instead of running underneath the
-            // numbers on the right.
-            StyledText {
-                anchors.left: placePin.right
-                anchors.leftMargin: Theme.spacingXS
-                anchors.right: placeCoords.left
-                anchors.rightMargin: Theme.spacingS
-                anchors.verticalCenter: parent.verticalCenter
-                text: view.place.label !== "" ? view.place.label
-                                              : root.coordText(view.place.lat, view.place.lon)
-                font.pixelSize: Theme.fontSizeSmall
-                color: Theme.surfaceVariantText
-                elide: Text.ElideRight
-            }
-
-            // The numbers stay on show beside a name: the name is the readable
-            // label, the coordinates are what is actually used.
-            StyledText {
-                id: placeCoords
                 anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
-                visible: view.place.label !== ""
-                width: visible ? implicitWidth : 0
-                text: root.coordText(view.place.lat, view.place.lon)
-                font.pixelSize: Theme.fontSizeSmall - 1
-                color: Theme.surfaceVariantText
-                opacity: 0.65
+                anchors.top: parent.top
+                anchors.margins: Theme.spacingS
+                spacing: Theme.spacingS
+
+                // --- Where the sun is ---
+                SunPath {
+                    place: view.place
+                    width: dayCol.width
+                    height: 104
+                    visible: view.place.sunSamples.length > 0
+                }
+
+                Rectangle {
+                    width: dayCol.width
+                    height: 1
+                    visible: view.place.located
+                    color: Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.08)
+                }
+
+                // --- Column header ---
+                Item {
+                    width: dayCol.width
+                    height: 16
+                    visible: view.place.located
+
+                    StyledText {
+                        anchors.right: parent.right
+                        anchors.rightMargin: 84
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "opens"
+                        font.pixelSize: Theme.fontSizeSmall - 2
+                        color: Theme.surfaceVariantText
+                    }
+
+                    StyledText {
+                        anchors.right: parent.right
+                        anchors.rightMargin: 12
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "closes"
+                        font.pixelSize: Theme.fontSizeSmall - 2
+                        color: Theme.surfaceVariantText
+                    }
+                }
+
+                // --- The whole day ---
+                Repeater {
+                    model: view.place.rows
+
+                    delegate: Item {
+                        required property var modelData
+                        width: dayCol.width
+                        height: modelData.marker ? 24 : 30
+
+                        // Already over. Every row is an instant, so Isha's close and
+                        // Islamic midnight, which land after 00:00, need no special case.
+                        readonly property bool isPast: (modelData.end !== null ? modelData.end : modelData.start)
+                                                       <= view.place.now
+
+                        // Matched by instant rather than by name: after Isha the next
+                        // prayer is tomorrow's Fajr, and this morning's Fajr row must
+                        // not claim it.
+                        readonly property bool isNext: !modelData.marker && view.place.next !== null
+                                                       && modelData.start === view.place.next.at
+                        readonly property bool isCurr: !modelData.marker && view.place.currentWindow !== null
+                                                       && modelData.start === view.place.currentWindow.start
+
+                        // State lives in the row's fill and weight; identity lives in
+                        // the dot's colour. Two channels, never mixed. Only what is open
+                        // gets a fill. What is next is said in words, so two rows are
+                        // never lit at once.
+                        Rectangle {
+                            anchors.fill: parent
+                            anchors.topMargin: 1
+                            anchors.bottomMargin: 1
+                            radius: height / 2
+                            color: parent.isCurr
+                                   ? Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.14)
+                                   : "transparent"
+                        }
+
+                        Rectangle {
+                            anchors.left: parent.left
+                            anchors.leftMargin: 12
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: modelData.marker ? 4 : 7
+                            height: width
+                            radius: width / 2
+                            color: view.place.prayerColor(modelData.label)
+                            opacity: parent.isPast ? 0.4 : 1
+                        }
+
+                        Row {
+                            anchors.left: parent.left
+                            anchors.leftMargin: modelData.marker ? 30 : 28
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: 5
+
+                            StyledText {
+                                text: modelData.label
+                                font.pixelSize: modelData.marker ? Theme.fontSizeSmall : Theme.fontSizeMedium
+                                font.weight: isCurr ? Font.Bold : Font.Normal
+                                font.italic: modelData.marker
+                                color: Theme.surfaceText
+                                opacity: isPast ? 0.5 : (modelData.marker ? 0.8 : 1)
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+
+                            StyledText {
+                                visible: isNext
+                                text: "upcoming"
+                                font.pixelSize: Theme.fontSizeSmall - 2
+                                font.italic: true
+                                color: Theme.primary
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                        }
+
+                        // Two right-aligned columns. The headers name them, so no arrow
+                        // is needed in seven consecutive rows.
+                        StyledText {
+                            visible: !modelData.marker
+                            anchors.right: parent.right
+                            anchors.rightMargin: 84
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: view.place.clockText(modelData.start)
+                            font.pixelSize: Theme.fontSizeSmall
+                            font.weight: isCurr ? Font.Bold : Font.Normal
+                            color: Theme.surfaceText
+                            opacity: isPast ? 0.5 : 1
+                        }
+
+                        StyledText {
+                            visible: !modelData.marker
+                            anchors.right: parent.right
+                            anchors.rightMargin: 12
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: modelData.end !== null ? view.place.clockText(modelData.end) : ""
+                            font.pixelSize: Theme.fontSizeSmall
+                            font.weight: isCurr ? Font.Bold : Font.Normal
+                            color: Theme.surfaceText
+                            opacity: isPast ? 0.45 : 0.85
+                        }
+
+                        // Sunrise and Islamic midnight open and close nothing, so their
+                        // single time sits centred across both columns rather than
+                        // pretending to be an opening time.
+                        StyledText {
+                            visible: modelData.marker
+                            x: parent.width - 122 + (110 - width) / 2
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: view.place.clockText(modelData.start)
+                            font.pixelSize: Theme.fontSizeSmall
+                            color: Theme.surfaceText
+                            opacity: isPast ? 0.45 : 0.8
+                        }
+                    }
+                }
+
+                // --- What all of this is computed for ---
+                // A footer rather than a header: it is checked occasionally, not
+                // watched, so it should not compete with the countdown.
+                Item {
+                    width: dayCol.width
+                    height: 22
+                    visible: view.place.located
+
+                    DIcon {
+                        id: placePin
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        name: "location_on"
+                        size: Theme.fontSizeSmall + 3
+                        color: Theme.surfaceVariantText
+                        opacity: 0.7
+                    }
+
+                    // Anchored between the pin and the coordinates rather than laid out
+                    // in a row, so a long name elides instead of running underneath the
+                    // numbers on the right.
+                    StyledText {
+                        anchors.left: placePin.right
+                        anchors.leftMargin: Theme.spacingXS
+                        anchors.right: placeCoords.left
+                        anchors.rightMargin: Theme.spacingS
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: view.place.label !== "" ? view.place.label
+                                                      : root.coordText(view.place.lat, view.place.lon)
+                        font.pixelSize: Theme.fontSizeSmall
+                        color: Theme.surfaceVariantText
+                        elide: Text.ElideRight
+                    }
+
+                    // The numbers stay on show beside a name: the name is the readable
+                    // label, the coordinates are what is actually used.
+                    StyledText {
+                        id: placeCoords
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        visible: view.place.label !== ""
+                        width: visible ? implicitWidth : 0
+                        text: root.coordText(view.place.lat, view.place.lon)
+                        font.pixelSize: Theme.fontSizeSmall - 1
+                        color: Theme.surfaceVariantText
+                        opacity: 0.65
+                    }
+                }
             }
         }
     }
@@ -1200,7 +1218,6 @@ PluginComponent {
                               + (popoutRoot.shown.moonTurning ? "" : (popoutRoot.shown.moonWaxes ? " ↑" : " ↓"))
                         font.pixelSize: Theme.fontSizeSmall - 1
                         color: Theme.surfaceVariantText
-                        opacity: 0.75
                         visible: popoutRoot.shown.hijriText !== "" && width + hijriLabel.width + 40 < parent.width
                     }
 
@@ -1218,8 +1235,7 @@ PluginComponent {
                         DIcon {
                             name: "refresh"
                             size: Theme.iconSize - 4
-                            color: Theme.surfaceVariantText
-                            opacity: refreshArea.containsMouse ? 1.0 : 0.7
+                            color: refreshArea.containsMouse ? Theme.surfaceText : Theme.surfaceVariantText
                             anchors.centerIn: parent
                         }
 
