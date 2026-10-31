@@ -81,13 +81,25 @@ PluginComponent {
     readonly property real nowMs: clock.date.getTime()
 
     // By the minute until a countdown enters its last ten, where it shows
-    // seconds (formatSplit). The extra minute of margin means the switch has
-    // happened before the first second is shown. Set from a handler, not
-    // bound: the countdowns are read off the clock this sets, which as a
-    // binding is a loop.
+    // seconds (formatSplit), or the pill is counting up from a prayer's start.
+    // The extra minute of margin means the switch has happened before the
+    // first second is shown. Set from a handler, not bound: the countdowns
+    // are read off the clock this sets, which as a binding is a loop.
     property bool fineClock: false
     onNowMsChanged: fineClock = Math.min(here.nextTotalSeconds || Infinity, here.spanRemainingSec || Infinity,
                                          there.nextTotalSeconds || Infinity, there.spanRemainingSec || Infinity) <= 660
+                                || pillJustStarted
+
+    // What the pill shows. For five minutes after a prayer begins it says how
+    // long ago, "−3m 12s", beside that prayer's symbol, in the accent colour;
+    // then it turns to the next one.
+    readonly property bool pillJustStarted: here.sinceStartSec >= 0 && here.sinceStartSec < 300
+    readonly property string pillName: pillJustStarted ? here.lastStart.name : here.nextName
+    readonly property string pillText: pillJustStarted ? "\u2212" + formatSplit(here.sinceStartSec)
+                                     : here.next ? formatSplit(here.nextTotalSeconds) : "…"
+    readonly property color pillColor: pillJustStarted ? accentColor
+                                     : urgencyColor(here.nextLevel, Theme.surfaceText)
+    readonly property bool pillBold: pillJustStarted || here.nextLevel > 0
     // The sun dot moves about a pixel a minute; redrawing the arc every second
     // when seconds are shown would repaint the canvas for nothing.
     readonly property real minuteMs: Math.floor(nowMs / 60000) * 60000
@@ -439,6 +451,14 @@ PluginComponent {
         readonly property int nextIdx: root.nextIndex(schedule, now)
         readonly property var next: nextIdx >= 0 ? schedule[nextIdx] : null
         readonly property string nextName: next ? next.name : ""
+
+        // The prayer that began most recently, and how long ago. Before the
+        // first prayer of the day that is last night's Isha, so one that began
+        // just before 00:00 is not lost when the date turns.
+        readonly property var lastStart: nextIdx > 0 ? schedule[nextIdx - 1]
+                                       : nextIdx === 0 && days.length === 3
+                                         ? { name: "Isha", at: days[0].at.isha } : null
+        readonly property int sinceStartSec: lastStart ? Math.round((now - lastStart.at) / 1000) : -1
         readonly property int nextTotalSeconds: next ? Math.max(0, secondsUntil(next.at)) : 0
 
         // The stretch the interface is describing, and whether it is a prayer
@@ -997,10 +1017,10 @@ PluginComponent {
                 anchors.horizontalCenter: parent.horizontalCenter
 
                 DIcon {
-                    name: here.located ? root.getPrayerIcon(here.nextName) : "location_off"
-                    fill: here.located ? root.getPrayerFill(here.nextName) : 0.0
+                    name: here.located ? root.getPrayerIcon(root.pillName) : "location_off"
+                    fill: here.located ? root.getPrayerFill(root.pillName) : 0.0
                     size: Theme.iconSize - 6
-                    color: root.urgencyColor(here.nextLevel, Theme.surfaceText)
+                    color: root.pillColor
                     anchors.verticalCenter: parent.verticalCenter
 
                     Behavior on color { ColorAnimation { duration: 400 } }
@@ -1009,10 +1029,10 @@ PluginComponent {
                 StyledText {
                     visible: !root.iconOnly
                     width: visible ? implicitWidth : 0
-                    text: here.next ? root.formatSplit(here.nextTotalSeconds) : "…"
+                    text: root.pillText
                     font.pixelSize: Theme.fontSizeSmall
-                    font.weight: here.nextLevel > 0 ? Font.Bold : Font.Normal
-                    color: root.urgencyColor(here.nextLevel, Theme.surfaceText)
+                    font.weight: root.pillBold ? Font.Bold : Font.Normal
+                    color: root.pillColor
                     anchors.verticalCenter: parent.verticalCenter
 
                     Behavior on color { ColorAnimation { duration: 400 } }
@@ -1047,10 +1067,10 @@ PluginComponent {
             spacing: 2
 
             DIcon {
-                name: here.located ? root.getPrayerIcon(here.nextName) : "location_off"
-                fill: here.located ? root.getPrayerFill(here.nextName) : 0.0
+                name: here.located ? root.getPrayerIcon(root.pillName) : "location_off"
+                fill: here.located ? root.getPrayerFill(root.pillName) : 0.0
                 size: Theme.iconSize - 6
-                color: root.urgencyColor(here.nextLevel, Theme.surfaceText)
+                color: root.pillColor
                 anchors.horizontalCenter: parent.horizontalCenter
 
                 Behavior on color { ColorAnimation { duration: 400 } }
@@ -1058,9 +1078,10 @@ PluginComponent {
 
             StyledText {
                 visible: here.next !== null
-                text: root.formatSplit(here.nextTotalSeconds)
+                text: root.pillText
                 font.pixelSize: Theme.fontSizeSmall - 2
-                color: root.urgencyColor(here.nextLevel, Theme.surfaceText)
+                font.weight: root.pillBold ? Font.Bold : Font.Normal
+                color: root.pillColor
                 anchors.horizontalCenter: parent.horizontalCenter
             }
         }
