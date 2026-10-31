@@ -93,9 +93,22 @@ PluginComponent {
     // What the pill shows. For five minutes after a prayer begins it says how
     // long ago, "−3m 12s", beside that prayer's symbol, in the accent colour;
     // then it turns to the next one.
-    readonly property bool pillJustStarted: here.sinceStartSec >= 0 && here.sinceStartSec < 300
+    //
+    // A right-click swaps the countdown for the next prayer's time on the
+    // clock, for a minute; another right-click swaps it back sooner. It never
+    // sticks, so a glance at the pill always means the countdown.
+    property bool pillShowsTime: false
+    pillRightClickAction: function () { root.pillShowsTime = !root.pillShowsTime }
+    Timer {
+        interval: 60000
+        running: root.pillShowsTime
+        onTriggered: root.pillShowsTime = false
+    }
+
+    readonly property bool pillJustStarted: !pillShowsTime && here.sinceStartSec >= 0 && here.sinceStartSec < 300
     readonly property string pillName: pillJustStarted ? here.lastStart.name : here.nextName
     readonly property string pillText: !here.next ? "…"
+                                     : pillShowsTime ? here.clockText(here.next.at)
                                      : pillJustStarted ? "\u2212" + formatSplit(here.sinceStartSec)
                                      : formatSplit(here.nextTotalSeconds)
     readonly property color pillColor: pillJustStarted ? accentColor
@@ -104,7 +117,7 @@ PluginComponent {
     // The widest the pill's text can be, one candidate per line: a hidden
     // text of these measures as its widest line, in exactly the pill's font.
     // Sized to that, the pill keeps its width as the seconds tick.
-    readonly property string pillWidest: "\u221288m 88s\n88h 88m"
+    readonly property string pillWidest: "\u221288m 88s\n88h 88m\n" + (use12H ? "88:88 PM" : "88:88")
     readonly property bool pillBold: pillJustStarted || here.nextLevel > 0
     // The sun dot moves about a pixel a minute; redrawing the arc every second
     // when seconds are shown would repaint the canvas for nothing.
@@ -1019,7 +1032,7 @@ PluginComponent {
 
             Row {
                 id: pillRow
-                spacing: root.iconOnly ? 0 : Theme.spacingXS
+                spacing: root.iconOnly && !root.pillShowsTime ? 0 : Theme.spacingXS
                 anchors.horizontalCenter: parent.horizontalCenter
 
                 DIcon {
@@ -1033,7 +1046,7 @@ PluginComponent {
                 }
 
                 StyledText {
-                    visible: !root.iconOnly
+                    visible: !root.iconOnly || root.pillShowsTime
                     width: visible ? hWidest.implicitWidth : 0
                     horizontalAlignment: Text.AlignHCenter
                     text: root.pillText
