@@ -386,6 +386,15 @@ PluginComponent {
             return sunPoint((root.minuteMs - root.instantOf(today.y, today.m, today.d, 0, today.tz)) / 3600000)
         }
 
+        // When a row's event next happens: later today, or tomorrow once
+        // today's has begun. Yesterday, today and tomorrow are all computed,
+        // so this is a lookup, never a calculation.
+        function upcoming(key) {
+            for (var i = 0; i < days.length; i++)
+                if (days[i].at[key] > now) return days[i].at[key]
+            return NaN
+        }
+
         // === The timeline ===
         readonly property var windows: days.length === 3 ? root.prayerWindows(days[0].at, days[1].at) : []
         readonly property var schedule: days.length === 3 ? root.prayerSchedule(days[1].at, days[2].at) : []
@@ -455,13 +464,13 @@ PluginComponent {
             if (days.length !== 3) return []
             var a = days[focusDay].at
             return [
-                { label: "Fajr",             start: a.fajr,     end: a.sunrise,  marker: false },
-                { label: "sunrise",          start: a.sunrise,  end: null,       marker: true  },
-                { label: "Dhuhr",            start: a.dhuhr,    end: a.asr,      marker: false },
-                { label: "Asr",              start: a.asr,      end: a.maghrib,  marker: false },
-                { label: "Maghrib",          start: a.maghrib,  end: a.isha,     marker: false },
-                { label: "Isha",             start: a.isha,     end: a.midnight, marker: false },
-                { label: "Islamic midnight", start: a.midnight, end: null,       marker: true  }
+                { key: "fajr",     label: "Fajr",             start: a.fajr,     end: a.sunrise,  marker: false },
+                { key: "sunrise",  label: "sunrise",          start: a.sunrise,  end: null,       marker: true  },
+                { key: "dhuhr",    label: "Dhuhr",            start: a.dhuhr,    end: a.asr,      marker: false },
+                { key: "asr",      label: "Asr",              start: a.asr,      end: a.maghrib,  marker: false },
+                { key: "maghrib",  label: "Maghrib",          start: a.maghrib,  end: a.isha,     marker: false },
+                { key: "isha",     label: "Isha",             start: a.isha,     end: a.midnight, marker: false },
+                { key: "midnight", label: "Islamic midnight", start: a.midnight, end: null,       marker: true  }
             ]
         }
 
@@ -946,6 +955,15 @@ PluginComponent {
         readonly property bool showsZone: remote && !isNaN(place.zoneOffset)
         readonly property int colShift: showsZone ? 64 : 0
 
+        // A row tapped to ask how long until it comes round. Forgotten when
+        // the tab changes or the popout reopens, like the tab itself.
+        property string picked: ""
+        onPlaceChanged: picked = ""
+        Connections {
+            target: root
+            function onInteractionActiveChanged() { if (root.interactionActive) view.picked = "" }
+        }
+
         // --- Nothing to compute from ---
         Rectangle {
             width: view.width
@@ -1097,6 +1115,7 @@ PluginComponent {
                                                        && modelData.start === view.place.next.at
                         readonly property bool isFocus: modelData.start === view.place.focusStart
                         readonly property bool open: isFocus && view.place.currentWindow !== null
+                        readonly property bool isPicked: view.picked === modelData.key
                         readonly property bool urgent: open && view.place.isUrgent
 
                         // State lives in the row's fill and weight; identity lives
@@ -1108,6 +1127,9 @@ PluginComponent {
                             radius: 14
                             color: row.isFocus
                                    ? Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, row.open ? 0.16 : 0.08)
+                                   : row.isPicked || pickArea.containsMouse
+                                   ? Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b,
+                                             row.isPicked ? 0.07 : 0.04)
                                    : "transparent"
                         }
 
@@ -1146,16 +1168,19 @@ PluginComponent {
                                 // The countdown, on the row it counts: how long is
                                 // left of what is open, or, on the sunrise or
                                 // midnight row, how long until the next prayer.
-                                // Elsewhere, a word marks the next prayer.
+                                // Elsewhere, a word marks the next prayer. A tapped
+                                // row says how long until it next comes round.
                                 StyledText {
-                                    visible: row.isFocus || row.isNext
-                                    text: row.open ? root.formatSplit(view.place.spanRemainingSec) + " left"
+                                    visible: row.isFocus || row.isNext || row.isPicked
+                                    text: row.isPicked
+                                          ? "in " + root.formatSplit(view.place.secondsUntil(view.place.upcoming(modelData.key)))
+                                          : row.open ? root.formatSplit(view.place.spanRemainingSec) + " left"
                                           : row.isFocus ? view.place.nextName + " in " + root.formatSplit(view.place.nextTotalSeconds)
                                           : "next"
-                                    font.pixelSize: row.isFocus ? Theme.fontSizeSmall : Theme.fontSizeSmall - 2
-                                    font.weight: row.isFocus ? Font.DemiBold : Font.Normal
-                                    font.italic: !row.isFocus
-                                    color: row.urgent ? Theme.error : Theme.primary
+                                    font.pixelSize: row.isFocus || row.isPicked ? Theme.fontSizeSmall : Theme.fontSizeSmall - 2
+                                    font.weight: row.isFocus || row.isPicked ? Font.DemiBold : Font.Normal
+                                    font.italic: !row.isFocus && !row.isPicked
+                                    color: row.isPicked ? Theme.secondary : row.urgent ? Theme.error : Theme.primary
                                     anchors.verticalCenter: parent.verticalCenter
 
                                     Behavior on color { ColorAnimation { duration: 400 } }
@@ -1240,6 +1265,14 @@ PluginComponent {
                                 Behavior on width { NumberAnimation { duration: 500; easing.type: Easing.OutCubic } }
                                 Behavior on color { ColorAnimation { duration: 400 } }
                             }
+                        }
+
+                        MouseArea {
+                            id: pickArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: view.picked = row.isPicked ? "" : modelData.key
                         }
                     }
                 }
