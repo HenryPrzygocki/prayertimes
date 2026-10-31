@@ -424,8 +424,8 @@ PluginComponent {
                                          && spanRemainingSec > 0 && spanRemainingSec <= 900
 
         // The row the panel is about: the window that is open, or, between
-        // windows, the prayer that comes next. It carries the countdown and
-        // the bar, so each is said once.
+        // windows, the prayer that comes next. It carries the countdown, and
+        // the bar when a window is open, so each is said once.
         readonly property real focusStart: currentWindow ? currentWindow.start : (next ? next.at : NaN)
 
         // The table shows the prayer day that holds that row, so it never
@@ -1072,7 +1072,7 @@ PluginComponent {
                         id: row
                         required property var modelData
                         width: dayCol.width
-                        height: line.height + (isFocus ? 20 : 0)
+                        height: line.height + (open ? 20 : 0)
 
                         // Already over. Every row is an instant, so Isha's close
                         // and Islamic midnight, which land after 00:00, need no
@@ -1207,11 +1207,12 @@ PluginComponent {
                             }
                         }
 
-                        // How far through: the open window from its opening to its
-                        // close, or the wait for the next prayer since the last
-                        // thing ended. Under the times it spans.
+                        // How far through the open window, under the times it
+                        // spans. Only an open window gets one: under a prayer's
+                        // opening and closing a bar reads as that prayer running
+                        // out, so the wait before one is said in words instead.
                         Rectangle {
-                            visible: row.isFocus
+                            visible: row.open
                             anchors.top: line.bottom
                             anchors.left: parent.left
                             anchors.right: parent.right
