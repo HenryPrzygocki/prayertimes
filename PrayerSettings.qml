@@ -147,18 +147,101 @@ PluginSettings {
         root.saveValue(k.label, place.label)
         root.saveValue(k.pLat, place.lat.toFixed(4))
         root.saveValue(k.pLon, place.lon.toFixed(4))
-        // The main location keeps the system's clock. The second has its own,
-        // and the directory knows which zone each town is in.
-        if (target === "sec")
+        // The directory already knows which zone each town is in, which saves
+        // the second location a lookup.
+        if (target === "sec" && place.timezone) {
             root.saveValue("secZone", place.timezone)
+            root.saveValue("secZoneLat", place.lat.toFixed(4))
+            root.saveValue("secZoneLon", place.lon.toFixed(4))
+        }
         root.placeResults = []
         root.searchStatus = "Set to " + place.label + "  \u00b7  "
                           + place.lat.toFixed(4) + ", " + place.lon.toFixed(4)
                           + (target === "sec" && place.timezone ? "  \u00b7  " + place.timezone : "")
     }
 
+    // === The second location's time zone ===
+    // Found from its coordinates, never typed: a zone is a fact about a point
+    // on the map, and asking for it by its tz name ("Africa/Casablanca", not
+    // "Marrakesh") was asking the user to do a lookup by hand. The zone is
+    // stored beside the coordinates it was found for, and the widget ignores
+    // it once they differ, so coordinates edited by hand are looked up again
+    // rather than shown on the old place's clock.
+    property bool zoneResolving: false
+    property string zoneStatus: ""
+
+    function secCoords() {
+        var lat = parseFloat(String(root.loadValue("secLat", "")).trim())
+        var lon = parseFloat(String(root.loadValue("secLon", "")).trim())
+        return (isNaN(lat) || isNaN(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180)
+             ? null : { lat: lat, lon: lon }
+    }
+
+    function resolveSecondZone() {
+        var c = root.secCoords()
+        if (!c) {
+            root.zoneStatus = ""
+            return
+        }
+        var zone = String(root.loadValue("secZone", ""))
+        var zLat = parseFloat(root.loadValue("secZoneLat", ""))
+        var zLon = parseFloat(root.loadValue("secZoneLon", ""))
+        if (zone && Math.abs(zLat - c.lat) < 0.001 && Math.abs(zLon - c.lon) < 0.001) {
+            root.zoneStatus = "Time zone " + zone + ", found from the coordinates."
+            return
+        }
+        if (root.zoneResolving)
+            return
+        root.zoneResolving = true
+        root.zoneStatus = "Finding the time zone\u2026"
+
+        var xhr = new XMLHttpRequest()
+        xhr.onreadystatechange = function () {
+            if (xhr.readyState !== XMLHttpRequest.DONE)
+                return
+            root.zoneResolving = false
+            var tz = ""
+            try {
+                tz = xhr.status === 200 ? (JSON.parse(xhr.responseText).timezone || "") : ""
+            } catch (e) {}
+            if (!tz || tz === "GMT") {
+                root.zoneStatus = "Could not find the time zone. Times are still shown on your clock."
+                return
+            }
+            root.saveValue("secZone", tz)
+            root.saveValue("secZoneLat", c.lat.toFixed(4))
+            root.saveValue("secZoneLon", c.lon.toFixed(4))
+            root.zoneStatus = "Time zone " + tz + ", found from the coordinates."
+        }
+        // The forecast endpoint is the cheapest of open-meteo's that answers
+        // "which zone is this point in"; nothing but the zone is read from it.
+        xhr.open("GET", "https://api.open-meteo.com/v1/forecast?forecast_days=1&timezone=auto"
+                      + "&latitude=" + c.lat.toFixed(4) + "&longitude=" + c.lon.toFixed(4))
+        xhr.send()
+    }
+
+    // Coordinates arrive one field at a time, so the lookup waits for them to
+    // settle. Saving the zone fires this again, and then finds it current.
+    Timer {
+        id: zoneCheck
+        interval: 800
+        onTriggered: root.resolveSecondZone()
+    }
+
+    Connections {
+        target: root.pluginService
+        enabled: root.pluginService !== null
+        function onPluginDataChanged(changedPluginId) {
+            if (changedPluginId === root.pluginId)
+                zoneCheck.restart()
+        }
+    }
+
+    Component.onCompleted: zoneCheck.restart()
+
     function clearSecond() {
-        var keys = ["secLat", "secLon", "secLabel", "secPlaceLat", "secPlaceLon", "secZone"]
+        var keys = ["secLat", "secLon", "secLabel", "secPlaceLat", "secPlaceLon",
+                    "secZone", "secZoneLat", "secZoneLon"]
         for (var i = 0; i < keys.length; i++)
             root.saveValue(keys[i], "")
         root.placeResults = []
@@ -407,7 +490,7 @@ PluginSettings {
 
             PlaceSearch {
                 target: "sec"
-                hint: "Picking a match fills in the coordinates and time zone below."
+                hint: "Picking a match fills in the coordinates below. The time zone is found from them, so the tab can also show each time on the clock there."
             }
 
             StringSetting {
@@ -422,12 +505,13 @@ PluginSettings {
                 defaultValue: ""
             }
 
-            StringSetting {
-                settingKey: "secZone"
-                label: "Time Zone"
-                description: "Optional. With it, the tab also shows each time on the clock there, in smaller type. A tz name such as Africa/Casablanca or Asia/Riyadh, not a city or a UTC offset; the search above fills it in."
-                placeholder: "Region/City"
-                defaultValue: ""
+            StyledText {
+                width: parent.width
+                visible: root.zoneStatus !== ""
+                text: root.zoneStatus
+                font.pixelSize: Theme.fontSizeSmall
+                color: Theme.surfaceVariantText
+                wrapMode: Text.WordWrap
             }
 
             SelectionSetting {
@@ -613,7 +697,7 @@ PluginSettings {
             }
 
             StyledText {
-                text: "Prayer times are computed locally from the sun's position — no network requests and no rate limits. The network is used only when you ask: searching for a town sends its name to a place directory, and naming your coordinates sends them to a reverse geocoder. Neither looks at your IP.\n\n• Each prayer as a window: when it opens, when it closes, how long is left\n• Islamic midnight and the Hijri date\n• 22 calculation methods, both Asr schools, high-latitude handling\n\nForked from the Prayer Times plugin by muadz (github.com/muadzmo/prayertimes). The local computation, prayer windows and interface are this fork's own work."
+                text: "Prayer times are computed locally from the sun's position — no network requests and no rate limits. The network is used only from these settings: searching for a town sends its name to a place directory, naming your coordinates sends them to a reverse geocoder, and setting a second location sends its coordinates to open-meteo to find its time zone. None looks at your IP, and the widget itself never goes online.\n\n• Each prayer as a window: when it opens, when it closes, how long is left\n• Islamic midnight and the Hijri date\n• 22 calculation methods, both Asr schools, high-latitude handling\n\nForked from the Prayer Times plugin by muadz (github.com/muadzmo/prayertimes). The local computation, prayer windows and interface are this fork's own work."
                 font.pixelSize: Theme.fontSizeSmall
                 color: Theme.surfaceVariantText
                 wrapMode: Text.WordWrap

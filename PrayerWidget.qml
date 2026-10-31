@@ -55,7 +55,12 @@ PluginComponent {
     // in a lower register.
     property real secLat: parseFloat(String(pluginData.secLat || "").trim())
     property real secLon: parseFloat(String(pluginData.secLon || "").trim())
-    property string secZone: String(pluginData.secZone || "").trim()
+    // Settings resolve the zone from the coordinates and record which ones it
+    // was resolved for; like a place's name, it is only used while it still
+    // describes them.
+    readonly property string secZone: labelFor(String(pluginData.secZone || "").trim(),
+                                               pluginData.secZoneLat, pluginData.secZoneLon,
+                                               secLat, secLon)
     readonly property string secMethod: pluginData.secMethod && pluginData.secMethod !== "same"
                                         ? pluginData.secMethod : method
     readonly property string secLabel: labelFor(pluginData.secLabel, pluginData.secPlaceLat,
