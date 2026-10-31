@@ -386,17 +386,19 @@ PluginComponent {
             return sunPoint((root.minuteMs - root.instantOf(today.y, today.m, today.d, 0, today.tz)) / 3600000)
         }
 
-        // The night in thirds, by the same reckoning as Islamic midnight -- its
-        // halfway point -- so the two always agree: sunset to sunrise, or to
-        // dawn under the Jafari rule. `first` is when the first third ends,
-        // `last` when the last third begins. The night is the one under way,
-        // or tonight's once this morning's sunrise has passed.
+        // The night in thirds, reckoned as the majority do: from sunset to the
+        // following Fajr, whatever the method -- the night that fasting and
+        // the night prayer count, not the sunset-to-sunrise span Islamic
+        // midnight halves. `first` is when the first third ends, `last` when
+        // the last third begins. The night is the one under way, or tonight's
+        // once this morning's Fajr has come.
         readonly property var thirds: {
             if (days.length !== 3) return null
-            var a = days[now < days[1].at.sunrise ? 0 : 1].at
-            var night = 2 * (a.midnight - a.sunset)
+            var i = now < days[1].at.fajr ? 0 : 1
+            var dusk = days[i].at.sunset, dawn = days[i + 1].at.fajr
+            var night = dawn - dusk
             if (!(night > 0)) return null
-            return { first: a.sunset + night / 3, last: a.sunset + 2 * night / 3 }
+            return { first: dusk + night / 3, last: dusk + 2 * night / 3 }
         }
 
         // The thirds on the path, placed by the hour on today's clock as the
