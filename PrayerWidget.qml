@@ -4,7 +4,7 @@ import Quickshell
 import Quickshell.Io
 import qs.Common
 import qs.Services
-import qs.Widgets
+import qs.DCommon.Widgets
 import qs.Modules.Plugins
 
 PluginComponent {
@@ -753,7 +753,7 @@ PluginComponent {
                 spacing: root.iconOnly ? 0 : Theme.spacingXS
                 anchors.horizontalCenter: parent.horizontalCenter
 
-                DankIcon {
+                DIcon {
                     name: root.located ? root.getPrayerIcon(root.nextName) : "location_off"
                     fill: root.located ? root.getPrayerFill(root.nextName) : 0.0
                     size: Theme.iconSize - 6
@@ -803,7 +803,7 @@ PluginComponent {
         Column {
             spacing: 2
 
-            DankIcon {
+            DIcon {
                 name: root.getPrayerIcon(root.nextName)
                 fill: root.getPrayerFill(root.nextName)
                 size: Theme.iconSize - 6
@@ -888,7 +888,7 @@ PluginComponent {
                                ? Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.12)
                                : "transparent"
 
-                        DankIcon {
+                        DIcon {
                             name: "refresh"
                             size: Theme.iconSize - 4
                             color: Theme.surfaceVariantText
@@ -926,7 +926,7 @@ PluginComponent {
                         Row {
                             spacing: Theme.spacingS
 
-                            DankIcon {
+                            DIcon {
                                 name: "location_off"
                                 size: Theme.iconSize - 4
                                 color: Theme.surfaceVariantText
@@ -981,7 +981,7 @@ PluginComponent {
                                 anchors.left: parent.left
                                 spacing: Theme.spacingXS
 
-                                DankIcon {
+                                DIcon {
                                     name: root.getPrayerIcon(root.nextName)
                                     fill: root.getPrayerFill(root.nextName)
                                     size: Theme.iconSize - 6
@@ -1272,7 +1272,7 @@ PluginComponent {
                     height: 22
                     visible: root.located
 
-                    DankIcon {
+                    DIcon {
                         id: placePin
                         anchors.left: parent.left
                         anchors.verticalCenter: parent.verticalCenter

@@ -1,6 +1,6 @@
 import QtQuick
 import qs.Common
-import qs.Widgets
+import qs.DCommon.Widgets
 import qs.Modules.Plugins
 
 PluginSettings {
@@ -268,11 +268,11 @@ PluginSettings {
                     color: Theme.surfaceVariantText
                 }
 
-                DankTextField {
+                DTextField {
                     id: placeField
                     width: parent.width
                     placeholderText: root.searching ? "Searching…" : "Town or city, then Enter"
-                    onEditingFinished: root.searchPlace(text)
+                    onAccepted: root.searchPlace(text)
                 }
 
                 StyledText {
@@ -429,7 +429,7 @@ PluginSettings {
             Row {
                 spacing: Theme.spacingM
 
-                DankIcon {
+                DIcon {
                     name: "info"
                     size: Theme.iconSize
                     color: Theme.primary
