@@ -116,8 +116,18 @@ PluginComponent {
 
     // The widest the pill's text can be, one candidate per line: a hidden
     // text of these measures as its widest line, in exactly the pill's font.
-    // Sized to that, the pill keeps its width as the seconds tick.
-    readonly property string pillWidest: "\u221288m 88s\n88h 88m\n" + (use12H ? "88:88 PM" : "88:88")
+    // The text sits centred in a box that wide, so the pill keeps its width
+    // as the seconds tick while the digits keep their own shapes. Their widths
+    // differ in a proportional font, so every digit is tried.
+    readonly property string pillWidest: {
+        var out = []
+        for (var d = 0; d <= 9; d++) {
+            var dd = "" + d + d
+            out.push("\u2212" + dd + "m " + dd + "s", dd + "h " + dd + "m",
+                     dd + ":" + dd + (use12H ? " PM" : ""))
+        }
+        return out.join("\n")
+    }
     readonly property bool pillBold: pillJustStarted || here.nextLevel > 0
     // The sun dot moves about a pixel a minute; redrawing the arc every second
     // when seconds are shown would repaint the canvas for nothing.
@@ -1052,7 +1062,6 @@ PluginComponent {
                     text: root.pillText
                     font.pixelSize: Theme.fontSizeSmall
                     font.weight: root.pillBold ? Font.Bold : Font.Normal
-                    font.features: { "tnum": 1 }
                     color: root.pillColor
 
                     StyledText {
@@ -1061,7 +1070,6 @@ PluginComponent {
                         text: root.pillWidest
                         font.pixelSize: Theme.fontSizeSmall
                         font.weight: Font.Bold
-                        font.features: { "tnum": 1 }
                     }
                     anchors.verticalCenter: parent.verticalCenter
 
@@ -1113,7 +1121,6 @@ PluginComponent {
                 text: root.pillText
                 font.pixelSize: Theme.fontSizeSmall - 2
                 font.weight: root.pillBold ? Font.Bold : Font.Normal
-                font.features: { "tnum": 1 }
                 color: root.pillColor
 
                 StyledText {
@@ -1122,7 +1129,6 @@ PluginComponent {
                     text: root.pillWidest
                     font.pixelSize: Theme.fontSizeSmall - 2
                     font.weight: Font.Bold
-                    font.features: { "tnum": 1 }
                 }
                 anchors.horizontalCenter: parent.horizontalCenter
             }
