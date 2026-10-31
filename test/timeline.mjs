@@ -71,14 +71,22 @@ for (const c of cities) {
     const i = C.nextIndex(s, T.at.isha + 60000)
     check(i === 5 && s[i].at === M.at.fajr, `${tag} next after Isha is tomorrow's Fajr`)
 
-    // Viewing the same place from another zone moves the clock, not the event:
-    // the instants must be identical.
-    const far = C.dayInstants(y, m, d,
-      C.computeDay(y, m, d, { lat: c.lat, lon: c.lon, tzOffset: T.tz + 7, method: c.method,
-                              asrFactor: 1, highLat: "angle" }), T.tz + 7)
-    for (const k of ["fajr", "dhuhr", "asr", "maghrib", "isha"])
-      check(Math.abs(far[k] - T.at[k]) < 1000 || Math.abs(Math.abs(far[k] - T.at[k]) - 86400000) < 600000,
-            `${tag} ${k} instant depends on viewing zone`)
+    // Viewing the same place from another zone -- which is how the second
+    // location is computed, on the system's clock -- moves the clock, not the
+    // event: the instants must agree, give or take the solar day the date
+    // picks out. Islamic midnight included: it must still land in the night
+    // after its own sunset, wherever that falls on the viewer's clock.
+    for (const shiftH of [7, -9, 12, -13]) {
+      const tzv = T.tz + shiftH
+      const far = C.dayInstants(y, m, d,
+        C.computeDay(y, m, d, { lat: c.lat, lon: c.lon, tzOffset: tzv, method: c.method,
+                                asrFactor: 1, highLat: "angle" }), tzv)
+      for (const k of ["fajr", "dhuhr", "asr", "maghrib", "isha", "midnight"])
+        check(Math.abs(far[k] - T.at[k]) < 1000 || Math.abs(Math.abs(far[k] - T.at[k]) - 86400000) < 600000,
+              `${tag} ${k} instant depends on viewing zone (${shiftH > 0 ? "+" : ""}${shiftH}h)`)
+      check(far.midnight > far.sunset && far.midnight < far.sunrise + 86400000,
+            `${tag} midnight outside its night viewed at ${shiftH}h`)
+    }
   }
 }
 

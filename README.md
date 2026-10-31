@@ -20,11 +20,10 @@ prayer times, computed locally from the sun's position.
   than running on to Dhuhr, and Isha closes at Islamic midnight — the middle of the night — rather
   than at the following dawn. Both leave a stretch with no prayer due, and the widget says so
   outright rather than going blank.
-- **A second location**, on its own tab in the popout: somewhere else to keep an eye on, with its
-  prayer times on its own clock and on yours, the time there, and how far it is from here. Its time
-  zone is an IANA name, filled in by the place search, and its offsets are read from the system's
-  tzdata, so daylight saving is followed there as it changes. It may follow its own calculation
-  method; the bar keeps following the main location.
+- **A second location**, on its own tab in the popout: somewhere else to keep an eye on, worked
+  out exactly as the main one is, with every time on your system's clock. Give it a time zone (the
+  place search fills one in) and each time is also shown, smaller, on the clock there. The bar keeps
+  following the main location.
 - **Hijri date**, with an adjustment for calendars set by local moonsighting.
 - 22 calculation methods, both Asr schools, angle-based high-latitude handling, and a polar clamp.
 
@@ -48,8 +47,8 @@ node timeline.mjs     # windows and countdowns across DST changes and time zones
 DankMaterialShell (Dux Shell) ≥ 2.0. Version 3 of this plugin uses the `qs.DCommon.Widgets` set
 that 2.0 introduced; for an older shell, check out the `v2.1.0` tag.
 
-The `process` permission is used only to read a second location's time-zone offsets with
-`date(1)`. No other external tools.
+The `process` permission is used only to read a second location's current UTC offset with
+`date(1)`, for showing times on its clock. No other external tools.
 
 ## Installation
 

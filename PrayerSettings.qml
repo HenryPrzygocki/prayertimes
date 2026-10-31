@@ -399,7 +399,7 @@ PluginSettings {
 
             StyledText {
                 width: parent.width
-                text: "Somewhere else to keep an eye on — family, or a trip. It gets its own tab in the popout, with its prayer times on its own clock and on yours. The bar keeps following the main location."
+                text: "Somewhere else to keep an eye on — family, or a trip. It gets its own tab in the popout, worked out exactly as the main location is, with every time on your clock. The bar keeps following the main location."
                 font.pixelSize: Theme.fontSizeSmall
                 color: Theme.surfaceVariantText
                 wrapMode: Text.WordWrap
@@ -425,8 +425,8 @@ PluginSettings {
             StringSetting {
                 settingKey: "secZone"
                 label: "Time Zone"
-                description: "An IANA name such as Asia/Riyadh or Europe/Istanbul, not a UTC offset, so daylight saving is followed there as it changes."
-                placeholder: "Area/City"
+                description: "Optional. With it, the tab also shows each time on the clock there, in smaller type. A tz name such as Africa/Casablanca or Asia/Riyadh, not a city or a UTC offset; the search above fills it in."
+                placeholder: "Region/City"
                 defaultValue: ""
             }
 

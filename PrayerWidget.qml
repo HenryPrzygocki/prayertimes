@@ -49,10 +49,10 @@ PluginComponent {
     property bool showPillProgress: pluginData.showPillProgress ?? true
 
     // === Second location ===
-    // Shown on its own tab in the popout, never on the bar. Its time zone is an
-    // IANA name (Asia/Riyadh), filled in by the place search in settings. A UTC
-    // offset would not do: it changes twice a year in most places worth
-    // watching, and the change rarely falls on the same day as ours.
+    // Shown on its own tab in the popout, never on the bar. It is computed
+    // exactly as the main one is, on the system's clock; its time zone (an IANA
+    // name, filled in by the place search) only adds its own clock beside that,
+    // in a lower register.
     property real secLat: parseFloat(String(pluginData.secLat || "").trim())
     property real secLon: parseFloat(String(pluginData.secLon || "").trim())
     property string secZone: String(pluginData.secZone || "").trim()
@@ -95,13 +95,11 @@ PluginComponent {
         property string label: ""
         property string method: "2"
 
-        // A place either keeps the system's clock, or names its own zone, whose
-        // offsets are looked up from tzdata (see lookupZone). zoneDays holds
-        // what came back: [{ y, m, d, tz }] for yesterday, today and tomorrow
-        // there.
-        property bool followsSystem: true
+        // Every place is computed on the system's clock. A place may also name
+        // its own zone, whose current UTC offset is looked up so its times can
+        // be read off the clock there as well (see lookupZone).
         property string zone: ""
-        property var zoneDays: null
+        property real zoneOffset: NaN
         property string zoneError: ""
 
         // Out of range is treated as unset: a latitude of 95 is a typo, and
@@ -128,31 +126,15 @@ PluginComponent {
         readonly property var today: days.length === 3 ? days[1] : null
         readonly property real now: root.nowMs
 
-        // UTC offset in hours at an instant, and the civil date it falls on.
-        // For a named zone the offset is the one in force on the day the
-        // instant falls in, taken from the three looked up. A change in the
-        // small hours of one of those days is therefore applied from its
-        // midnight rather than from 02:00 -- an hour's error on the handful of
-        // minutes before it, on two nights a year.
+        // UTC offset in hours at an instant, and the civil date it falls on,
+        // both on the system's clock.
         function offsetAt(ms) {
-            if (followsSystem || !zoneDays)
-                return -new Date(ms).getTimezoneOffset() / 60
-            var tz = zoneDays[0].tz
-            for (var i = 0; i < zoneDays.length; i++) {
-                var z = zoneDays[i]
-                if (ms >= Date.UTC(z.y, z.m - 1, z.d) - z.tz * 3600000)
-                    tz = z.tz
-            }
-            return tz
+            return -new Date(ms).getTimezoneOffset() / 60
         }
 
         function civilDate(ms) {
-            if (followsSystem) {
-                var d = new Date(ms)
-                return [d.getFullYear(), d.getMonth() + 1, d.getDate()]
-            }
-            var w = new Date(ms + offsetAt(ms) * 3600000)
-            return [w.getUTCFullYear(), w.getUTCMonth() + 1, w.getUTCDate()]
+            var d = new Date(ms)
+            return [d.getFullYear(), d.getMonth() + 1, d.getDate()]
         }
 
         function dateKey(ymd) {
@@ -180,15 +162,13 @@ PluginComponent {
         onLatChanged: refresh()
         onLonChanged: refresh()
         onMethodChanged: refresh()
-        onZoneChanged: refresh()
+        onZoneChanged: lookupZone()
         Component.onCompleted: refresh()
 
         // Prayer times are a deterministic function of the date, so they only
         // need recomputing when the civil date rolls over -- not on a polling
         // interval.
-        // A zone that failed to resolve is not retried every minute; editing
-        // it is what tries again.
-        onNowChanged: if (zoneError === "" && dateKey(civilDate(now)) !== lastComputed) recompute()
+        onNowChanged: if (dateKey(civilDate(now)) !== lastComputed) recompute()
 
         Timer {
             id: debounce
@@ -201,7 +181,6 @@ PluginComponent {
             // arc and the Hijri date behind drew a live sky for wherever the
             // coordinates used to point, under a card showing nothing.
             days = []
-            zoneDays = null
             lastComputed = ""
             hijriText = ""
             moonName = ""
@@ -210,15 +189,13 @@ PluginComponent {
         }
 
         function recompute() {
-            zoneError = ""
             if (!located) {
                 clear()
                 return
             }
-            if (!followsSystem) {
-                lookupZone()
-                return
-            }
+            // Offsets change at most once a day, so the zone is re-read when
+            // the day is.
+            lookupZone()
             var c = civilDate(now)
             var dates = [], offsets = []
             for (var k = -1; k <= 1; k++) {
@@ -231,46 +208,38 @@ PluginComponent {
             computeDays(dates, offsets)
         }
 
-        // QML's Date knows only the system's zone, so another zone's offsets
-        // come from glibc's tzdata via date(1) -- the same source Qt reads, and
-        // the one the test harness checks against. The zone is passed as an
-        // argument, never spliced into the script, and must be a real TZif
-        // file: glibc silently treats an unknown TZ as UTC, which would
-        // compute every time hours out without a word.
+        // QML's Date knows only the system's zone, so another zone's offset
+        // comes from glibc's tzdata via date(1), the same source Qt reads. The
+        // zone is passed as an argument, never spliced into the script, and
+        // must be a real TZif file: glibc silently reads an unknown TZ as UTC,
+        // which would show every time hours out without a word.
+        //
+        // The offset is the one in force now, applied to the whole day. On the
+        // two days a year the clocks change there, times on the far side of
+        // the change read an hour out on that clock -- the system-clock times,
+        // which are what is acted on, are unaffected.
         function lookupZone() {
             var z = place.zone
+            zoneError = ""
             if (z === "") {
-                clear()
-                zoneError = "No time zone set for this place."
+                zoneOffset = NaN
                 return
             }
             var script = 'z=$0\n'
                 + 'case $z in ""|/*|*..*) exit 2;; esac\n'
                 + 'f="/usr/share/zoneinfo/$z"\n'
                 + '[ -f "$f" ] && [ "$(head -c 4 "$f")" = TZif ] || exit 2\n'
-                + 'export TZ="$z"\n'
-                + 'd=$(date +%F)\n'
-                + 'for k in yesterday today tomorrow; do date -d "$d 12:00 $k" "+%Y %m %d %z"; done\n'
+                + 'TZ="$z" date +%z\n'
             Proc.runCommand("prayerTimes.zone", ["sh", "-c", script, z], function (out, code) {
                 if (z !== place.zone)
                     return   // superseded while it ran
-                var lines = String(out || "").trim().split("\n")
-                var parsed = []
-                for (var i = 0; i < lines.length; i++) {
-                    var f = lines[i].trim().split(" ")
-                    if (f.length !== 4) break
-                    var sign = f[3][0] === "-" ? -1 : 1
-                    parsed.push({ y: Number(f[0]), m: Number(f[1]), d: Number(f[2]),
-                                  tz: sign * (Number(f[3].slice(1, 3)) + Number(f[3].slice(3, 5)) / 60) })
-                }
-                if (code !== 0 || parsed.length !== 3 || parsed.some(function (p) { return isNaN(p.tz) })) {
-                    clear()
+                var o = String(out || "").trim()
+                if (code !== 0 || !/^[+-]\d{4}$/.test(o)) {
+                    zoneOffset = NaN
                     zoneError = "Unknown time zone \u201c" + z + "\u201d."
                     return
                 }
-                zoneDays = parsed
-                computeDays(parsed.map(function (p) { return [p.y, p.m, p.d] }),
-                            parsed.map(function (p) { return p.tz }))
+                zoneOffset = (o[0] === "-" ? -1 : 1) * (Number(o.slice(1, 3)) + Number(o.slice(3, 5)) / 60)
             }, 0)
         }
 
@@ -424,10 +393,32 @@ PluginComponent {
             return Math.round((ms - now) / 1000)
         }
 
-        // An instant on this place's wall clock, in the user's 12/24-hour style.
-        function clockText(ms) {
+        // An instant on the system's clock, in the user's 12/24-hour style.
+        // With `marked`, a time falling on another day than today is tagged +1
+        // or -1: read off our clock, a far place's day can begin last night.
+        function clockText(ms, marked) {
             if (ms === null || ms === undefined || isNaN(ms)) return ""
-            return root.formatTime(root.toHHMM(root.wallHours(ms, offsetAt(ms))))
+            var text = root.formatTime(root.toHHMM(root.wallHours(ms, offsetAt(ms))))
+            return marked ? text + dayMark(civilDate(ms), civilDate(now)) : text
+        }
+
+        // The same instant on the clock there, tagged against that clock's
+        // today. Empty when the place names no zone, or one that did not
+        // resolve.
+        function zoneClock(ms) {
+            if (ms === null || ms === undefined || isNaN(ms) || isNaN(zoneOffset)) return ""
+            var shifted = function (t) {
+                var w = new Date(t + zoneOffset * 3600000)
+                return [w.getUTCFullYear(), w.getUTCMonth() + 1, w.getUTCDate()]
+            }
+            return root.formatTime(root.toHHMM(root.wallHours(ms, zoneOffset)))
+                 + dayMark(shifted(ms), shifted(now))
+        }
+
+        function dayMark(day, today) {
+            var diff = Math.round((Date.UTC(day[0], day[1] - 1, day[2])
+                                   - Date.UTC(today[0], today[1] - 1, today[2])) / 86400000)
+            return diff === 0 ? "" : (diff > 0 ? " +" : " \u2212") + Math.abs(diff)
         }
     }
 
@@ -441,7 +432,6 @@ PluginComponent {
 
     Place {
         id: there
-        followsSystem: false
         lat: root.secLat
         lon: root.secLon
         zone: root.secZone
@@ -449,21 +439,9 @@ PluginComponent {
         label: root.secLabel
     }
 
-    // An instant on the system's own clock, marked when it falls on a
-    // different day from the place being read, so a remote Fajr at 05:10
-    // reads as 22:10 -1 here rather than as something tonight.
-    function localClock(place, ms) {
-        if (ms === null || ms === undefined || isNaN(ms)) return ""
-        var text = formatTime(toHHMM(wallHours(ms, -new Date(ms).getTimezoneOffset() / 60)))
-        var l = new Date(ms), r = place.civilDate(ms)
-        var diff = Math.round((Date.UTC(l.getFullYear(), l.getMonth(), l.getDate())
-                               - Date.UTC(r[0], r[1] - 1, r[2])) / 86400000)
-        return diff === 0 ? text : text + (diff > 0 ? " +" : " \u2212") + Math.abs(diff)
-    }
-
     // How far a place's clock is from ours, in words.
     function offsetText(place) {
-        var d = place.offsetAt(nowMs) + new Date(nowMs).getTimezoneOffset() / 60
+        var d = place.zoneOffset + new Date(nowMs).getTimezoneOffset() / 60
         if (Math.abs(d) < 1 / 120) return "same time as here"
         var h = Math.floor(Math.abs(d)), m = Math.round((Math.abs(d) - h) * 60)
         return (h > 0 ? h + "h" : "") + (h > 0 && m > 0 ? " " : "") + (m > 0 ? m + "m" : "")
@@ -882,18 +860,19 @@ PluginComponent {
         required property var place
         spacing: Theme.spacingS
 
-        // A place on another clock gets a third column, its times read off
-        // ours, and the time-scaled columns move left to make room for it.
-        readonly property bool remote: !place.followsSystem
-        readonly property bool live: place.located && place.zoneError === ""
-        readonly property int colShift: remote ? 72 : 0
+        // Every time here is on the system's clock. A second place with a
+        // zone also shows its own clock, quieter, in a third column; the
+        // other columns move left to make room for it.
+        readonly property bool remote: place !== here
+        readonly property bool showsZone: remote && !isNaN(place.zoneOffset)
+        readonly property int colShift: showsZone ? 64 : 0
 
         // --- Nothing to compute from ---
         Rectangle {
             width: view.width
             height: emptyCol.implicitHeight + Theme.spacingL * 2
             radius: 12
-            visible: !view.live
+            visible: !view.place.located
             color: Theme.surfaceContainerHigh
 
             Column {
@@ -916,7 +895,7 @@ PluginComponent {
                     }
 
                     StyledText {
-                        text: !view.place.located ? "No location set" : "Time zone needed"
+                        text: "No location set"
                         font.pixelSize: Theme.fontSizeMedium
                         font.weight: Font.Bold
                         color: Theme.surfaceText
@@ -926,9 +905,7 @@ PluginComponent {
 
                 StyledText {
                     width: parent.width
-                    text: view.place.zoneError !== ""
-                          ? view.place.zoneError + " Searching for the place in plugin settings fills its zone in; it can also be typed, as a name like Asia/Riyadh."
-                          : "Prayer times are computed from your coordinates. Set them in plugin settings, or search there for your town."
+                    text: "Prayer times are computed from your coordinates. Set them in plugin settings, or search there for your town."
                     font.pixelSize: Theme.fontSizeSmall
                     color: Theme.surfaceVariantText
                     wrapMode: Text.WordWrap
@@ -940,7 +917,7 @@ PluginComponent {
         // The first thing to know about somewhere else is what its clock says,
         // and how far that is from ours.
         Row {
-            visible: view.remote && view.live && view.place.today !== null
+            visible: view.remote && view.place.located && (view.showsZone || view.place.zoneError !== "")
             spacing: Theme.spacingXS
             leftPadding: Theme.spacingXS
 
@@ -952,7 +929,8 @@ PluginComponent {
             }
 
             StyledText {
-                text: view.place.clockText(view.place.now)
+                visible: view.showsZone
+                text: view.place.zoneClock(view.place.now)
                 font.pixelSize: Theme.fontSizeMedium
                 font.weight: Font.DemiBold
                 color: Theme.surfaceText
@@ -960,7 +938,7 @@ PluginComponent {
             }
 
             StyledText {
-                text: "there  \u00b7  " + root.offsetText(view.place)
+                text: view.showsZone ? "there  \u00b7  " + root.offsetText(view.place) : view.place.zoneError
                 font.pixelSize: Theme.fontSizeSmall
                 color: Theme.surfaceVariantText
                 anchors.verticalCenter: parent.verticalCenter
@@ -975,7 +953,7 @@ PluginComponent {
             width: view.width
             height: nextCol.implicitHeight + Theme.spacingM * 2
             radius: 12
-            visible: view.live
+            visible: view.place.located
             color: Theme.surfaceContainerHigh
 
             Column {
@@ -1017,9 +995,10 @@ PluginComponent {
                     StyledText {
                         anchors.right: parent.right
                         anchors.verticalCenter: nameRow.verticalCenter
+                        textFormat: Text.StyledText
                         text: !view.place.next ? ""
-                              : view.place.clockText(view.place.next.at)
-                                + (view.remote ? "  \u00b7  " + root.localClock(view.place, view.place.next.at) + " here" : "")
+                              : view.place.clockText(view.place.next.at, view.remote)
+                                + (view.showsZone ? "<small>  \u00b7  " + view.place.zoneClock(view.place.next.at) + " there</small>" : "")
                         font.pixelSize: Theme.fontSizeMedium
                         font.weight: Font.Medium
                         color: Theme.surfaceVariantText
@@ -1049,7 +1028,7 @@ PluginComponent {
                             id: spanFrom
                             anchors.left: parent.left
                             anchors.verticalCenter: parent.verticalCenter
-                            text: view.place.activeSpan ? view.place.clockText(view.place.activeSpan.start) : ""
+                            text: view.place.activeSpan ? view.place.clockText(view.place.activeSpan.start, view.remote) : ""
                             font.pixelSize: Theme.fontSizeSmall - 1
                             color: Theme.surfaceVariantText
                         }
@@ -1058,7 +1037,7 @@ PluginComponent {
                             id: spanTo
                             anchors.right: parent.right
                             anchors.verticalCenter: parent.verticalCenter
-                            text: view.place.activeSpan ? view.place.clockText(view.place.activeSpan.end) : ""
+                            text: view.place.activeSpan ? view.place.clockText(view.place.activeSpan.end, view.remote) : ""
                             font.pixelSize: Theme.fontSizeSmall - 1
                             color: Theme.surfaceVariantText
                         }
@@ -1117,7 +1096,7 @@ PluginComponent {
             width: view.width
             height: dayCol.implicitHeight + Theme.spacingS * 2
             radius: 12
-            visible: view.live
+            visible: view.place.located
             color: Theme.surfaceContainerHigh
 
             Column {
@@ -1139,7 +1118,7 @@ PluginComponent {
                 Rectangle {
                     width: dayCol.width
                     height: 1
-                    visible: view.live
+                    visible: view.place.located
                     color: Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.08)
                 }
 
@@ -1147,7 +1126,7 @@ PluginComponent {
                 Item {
                     width: dayCol.width
                     height: 16
-                    visible: view.live
+                    visible: view.place.located
 
                     StyledText {
                         anchors.right: parent.right
@@ -1168,13 +1147,14 @@ PluginComponent {
                     }
 
                     StyledText {
-                        visible: view.remote
+                        visible: view.showsZone
                         anchors.right: parent.right
                         anchors.rightMargin: 12
                         anchors.verticalCenter: parent.verticalCenter
-                        text: "opens here"
+                        text: "there"
                         font.pixelSize: Theme.fontSizeSmall - 2
-                        color: Theme.primary
+                        font.italic: true
+                        color: Theme.surfaceVariantText
                     }
                 }
 
@@ -1258,7 +1238,7 @@ PluginComponent {
                             anchors.right: parent.right
                             anchors.rightMargin: 84 + view.colShift
                             anchors.verticalCenter: parent.verticalCenter
-                            text: view.place.clockText(modelData.start)
+                            text: view.place.clockText(modelData.start, view.remote)
                             font.pixelSize: Theme.fontSizeSmall
                             font.weight: isCurr ? Font.Bold : Font.Normal
                             color: Theme.surfaceText
@@ -1270,7 +1250,7 @@ PluginComponent {
                             anchors.right: parent.right
                             anchors.rightMargin: 12 + view.colShift
                             anchors.verticalCenter: parent.verticalCenter
-                            text: modelData.end !== null ? view.place.clockText(modelData.end) : ""
+                            text: modelData.end !== null ? view.place.clockText(modelData.end, view.remote) : ""
                             font.pixelSize: Theme.fontSizeSmall
                             font.weight: isCurr ? Font.Bold : Font.Normal
                             color: Theme.surfaceText
@@ -1284,25 +1264,25 @@ PluginComponent {
                             visible: modelData.marker
                             x: parent.width - 122 - view.colShift + (110 - width) / 2
                             anchors.verticalCenter: parent.verticalCenter
-                            text: view.place.clockText(modelData.start)
+                            text: view.place.clockText(modelData.start, view.remote)
                             font.pixelSize: Theme.fontSizeSmall
                             color: Theme.surfaceText
                             opacity: isPast ? 0.45 : 0.8
                         }
 
-                        // The same opening read off our own clock: when to
-                        // pray there is the question, when that is here is
-                        // what the person reading this can act on.
+                        // The same opening on the clock there, smaller and
+                        // quieter: the system's clock is what is acted on, this
+                        // is for reference.
                         StyledText {
-                            visible: view.remote
+                            visible: view.showsZone
                             anchors.right: parent.right
                             anchors.rightMargin: 12
                             anchors.verticalCenter: parent.verticalCenter
-                            text: root.localClock(view.place, modelData.start)
-                            font.pixelSize: Theme.fontSizeSmall
-                            font.weight: isCurr ? Font.Bold : Font.Normal
-                            color: Theme.primary
-                            opacity: isPast ? 0.5 : (modelData.marker ? 0.8 : 1)
+                            text: view.place.zoneClock(modelData.start)
+                            font.pixelSize: Theme.fontSizeSmall - 1
+                            font.italic: true
+                            color: Theme.surfaceVariantText
+                            opacity: isPast ? 0.6 : 1
                         }
                     }
                 }
@@ -1313,7 +1293,7 @@ PluginComponent {
                 Item {
                     width: dayCol.width
                     height: 22
-                    visible: view.live
+                    visible: view.place.located
 
                     DIcon {
                         id: placePin
@@ -1806,14 +1786,17 @@ PluginComponent {
         return Date.UTC(year, month - 1, day) + (hours - tzOffset) * 3600000
     }
 
-    // A civil day's events as instants. Islamic midnight usually lands after
-    // 00:00, and then belongs to the night that follows the day's sunset.
+    // A civil day's events as instants. Islamic midnight belongs to the night
+    // that follows the day's sunset. On the place's own clock that usually
+    // means after 00:00; read off a clock in another zone it can fall
+    // anywhere, so it is placed after sunset rather than after noon.
     function dayInstants(year, month, day, times, tzOffset) {
         var out = {}
         for (var k in times)
             out[k] = instantOf(year, month, day, times[k], tzOffset)
-        if (times.midnight < 12)
-            out.midnight += 86400000
+        if (isFinite(out.midnight) && isFinite(out.sunset))
+            while (out.midnight < out.sunset)
+                out.midnight += 86400000
         return out
     }
 
