@@ -808,7 +808,8 @@ PluginComponent {
                 opacity: 0.8
             }
             StyledText {
-                text: "sunrise"
+                text: "sunrise" + (sky.place.today && !isNaN(sky.place.zoneOffset) && sky.place.showsOwnClock
+                                   ? "  \u00b7  " + sky.place.zoneClock(sky.place.today.at.sunrise) + " there" : "")
                 font.pixelSize: Theme.fontSizeSmall - 2
                 color: Theme.surfaceVariantText
             }
@@ -828,7 +829,8 @@ PluginComponent {
             }
             StyledText {
                 anchors.right: parent.right
-                text: "sunset"
+                text: (sky.place.today && !isNaN(sky.place.zoneOffset) && sky.place.showsOwnClock
+                       ? sky.place.zoneClock(sky.place.today.at.maghrib) + " there  \u00b7  " : "") + "sunset"
                 font.pixelSize: Theme.fontSizeSmall - 2
                 color: Theme.surfaceVariantText
             }
@@ -1325,7 +1327,7 @@ PluginComponent {
                         // --- Date ---
                         Item {
                             width: headCol.width
-                            height: Math.max(hijriLabel.height, refreshPill.height)
+                            height: 28
 
                             Row {
                                 id: hijriLabel
@@ -1360,33 +1362,6 @@ PluginComponent {
                                 font.pixelSize: Theme.fontSizeSmall - 1
                                 color: Theme.surfaceVariantText
                                 visible: popoutRoot.shown.hijriText !== "" && width + hijriLabel.width + 40 < parent.width
-                            }
-
-                            Rectangle {
-                                id: refreshPill
-                                width: 28
-                                height: 28
-                                radius: width / 2
-                                anchors.right: parent.right
-                                anchors.verticalCenter: parent.verticalCenter
-                                color: refreshArea.containsMouse
-                                       ? Qt.rgba(Theme.surfaceText.r, Theme.surfaceText.g, Theme.surfaceText.b, 0.12)
-                                       : "transparent"
-
-                                DIcon {
-                                    name: "refresh"
-                                    size: Theme.iconSize - 4
-                                    color: refreshArea.containsMouse ? Theme.surfaceText : Theme.surfaceVariantText
-                                    anchors.centerIn: parent
-                                }
-
-                                MouseArea {
-                                    id: refreshArea
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: popoutRoot.shown.recompute()
-                                }
                             }
                         }
 
@@ -1457,9 +1432,10 @@ PluginComponent {
                                 textFormat: Text.StyledText
                                 font.pixelSize: Theme.fontSizeSmall
                                 color: Theme.surfaceVariantText
-                                text: !isNaN(there.zoneOffset)
-                                      ? "<b>" + there.zoneClock(there.now) + "</b> there  \u00b7  " + root.offsetText(there)
-                                      : (there.zoneLoading ? "checking the time there\u2026" : "time there unknown")
+                                text: (there.label !== "" ? there.label.split(",")[0] + "  " : "")
+                                      + (!isNaN(there.zoneOffset)
+                                         ? "<b>" + there.zoneClock(there.now) + "</b>  \u00b7  " + root.offsetText(there)
+                                         : (there.zoneLoading ? "checking the time\u2026" : "time unknown"))
                             }
                         }
                     }
