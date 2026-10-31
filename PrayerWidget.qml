@@ -399,8 +399,19 @@ PluginComponent {
         readonly property var activeSpan: root.spanAt(windows, now)
         readonly property var currentWindow: activeSpan && !activeSpan.gap ? activeSpan : null
 
-        readonly property int spanElapsedSec: activeSpan ? Math.max(0, -secondsUntil(activeSpan.start)) : 0
-        readonly property int spanRemainingSec: activeSpan ? Math.max(0, secondsUntil(activeSpan.end)) : 0
+        // The stretch the table marks: the open window, or the wait for the
+        // next prayer since sunrise or Islamic midnight -- whichever ended the
+        // last window. After a midnight that falls before 00:00 no gap is on
+        // the timeline yet, so it starts at tonight's midnight.
+        readonly property var focusSpan: {
+            if (currentWindow) return currentWindow
+            if (!next || days.length !== 3) return null
+            var start = activeSpan ? activeSpan.start : days[1].at.midnight
+            return start <= now ? { start: start, end: next.at, gap: true } : null
+        }
+
+        readonly property int spanElapsedSec: focusSpan ? Math.max(0, -secondsUntil(focusSpan.start)) : 0
+        readonly property int spanRemainingSec: focusSpan ? Math.max(0, secondsUntil(focusSpan.end)) : 0
         readonly property real spanProgress: {
             var total = spanElapsedSec + spanRemainingSec
             return total > 0 ? spanElapsedSec / total : 0
@@ -424,19 +435,18 @@ PluginComponent {
                                          && spanRemainingSec > 0 && spanRemainingSec <= 900
 
         // The row the panel is about: the window that is open, or, between
-        // windows, the prayer that comes next. It carries the countdown, and
-        // the bar when a window is open, so each is said once.
-        readonly property real focusStart: currentWindow ? currentWindow.start : (next ? next.at : NaN)
+        // windows, the sunrise or midnight that began the wait. It carries the
+        // countdown and the bar, so each is said once, and the bar under a row
+        // always means that row's stretch running out.
+        readonly property real focusStart: focusSpan ? focusSpan.start : NaN
 
         // The table shows the prayer day that holds that row, so it never
-        // needs an extra one: until Islamic midnight, last night's Isha is
-        // still open and yesterday is shown; after a midnight that falls
-        // before 00:00, the next prayer is tomorrow's Fajr and tomorrow is.
+        // needs an extra one: from last night's Isha until Fajr, that is
+        // yesterday; otherwise today.
         readonly property int focusDay: {
-            if (days.length !== 3) return 1
-            if (currentWindow && currentWindow.start === days[0].at.isha) return 0
-            if (!currentWindow && next && next.at === days[2].at.fajr) return 2
-            return 1
+            if (days.length !== 3 || !focusSpan) return 1
+            var s = focusSpan.start, y = days[0].at
+            return s === y.isha || s === y.midnight ? 0 : 1
         }
 
         // The day as the table lists it. Sunrise and Islamic midnight open and
@@ -1027,8 +1037,7 @@ PluginComponent {
                         anchors.left: parent.left
                         anchors.leftMargin: 12
                         anchors.verticalCenter: parent.verticalCenter
-                        text: view.place.focusDay === 0 ? "yesterday"
-                              : view.place.focusDay === 2 ? "tomorrow" : ""
+                        text: view.place.focusDay === 0 ? "yesterday" : ""
                         font.pixelSize: Theme.fontSizeSmall - 2
                         font.italic: true
                         color: Theme.primary
@@ -1072,21 +1081,21 @@ PluginComponent {
                         id: row
                         required property var modelData
                         width: dayCol.width
-                        height: line.height + (open ? 20 : 0)
+                        height: line.height + (isFocus ? 20 : 0)
 
                         // Already over. Every row is an instant, so Isha's close
                         // and Islamic midnight, which land after 00:00, need no
                         // special case.
-                        readonly property bool isPast: (modelData.end !== null ? modelData.end : modelData.start)
-                                                       <= view.place.now
+                        readonly property bool isPast: !row.isFocus
+                                                       && (modelData.end !== null ? modelData.end : modelData.start)
+                                                          <= view.place.now
 
                         // Matched by instant rather than by name: after Isha the
                         // next prayer is tomorrow's Fajr, and this morning's Fajr
                         // row must not claim it.
                         readonly property bool isNext: !modelData.marker && view.place.next !== null
                                                        && modelData.start === view.place.next.at
-                        readonly property bool isFocus: !modelData.marker
-                                                        && modelData.start === view.place.focusStart
+                        readonly property bool isFocus: modelData.start === view.place.focusStart
                         readonly property bool open: isFocus && view.place.currentWindow !== null
                         readonly property bool urgent: open && view.place.isUrgent
 
@@ -1135,12 +1144,13 @@ PluginComponent {
                                 }
 
                                 // The countdown, on the row it counts: how long is
-                                // left of what is open, or how long until what is
-                                // next. Elsewhere, a word marks the next prayer.
+                                // left of what is open, or, on the sunrise or
+                                // midnight row, how long until the next prayer.
+                                // Elsewhere, a word marks the next prayer.
                                 StyledText {
                                     visible: row.isFocus || row.isNext
                                     text: row.open ? root.formatSplit(view.place.spanRemainingSec) + " left"
-                                          : row.isFocus ? "in " + root.formatSplit(view.place.nextTotalSeconds)
+                                          : row.isFocus ? view.place.nextName + " in " + root.formatSplit(view.place.nextTotalSeconds)
                                           : "next"
                                     font.pixelSize: row.isFocus ? Theme.fontSizeSmall : Theme.fontSizeSmall - 2
                                     font.weight: row.isFocus ? Font.DemiBold : Font.Normal
@@ -1207,12 +1217,11 @@ PluginComponent {
                             }
                         }
 
-                        // How far through the open window, under the times it
-                        // spans. Only an open window gets one: under a prayer's
-                        // opening and closing a bar reads as that prayer running
-                        // out, so the wait before one is said in words instead.
+                        // How far through the row's stretch: the open window to
+                        // its close, or the wait since sunrise or midnight to
+                        // the next prayer.
                         Rectangle {
-                            visible: row.open
+                            visible: row.isFocus
                             anchors.top: line.bottom
                             anchors.left: parent.left
                             anchors.right: parent.right
