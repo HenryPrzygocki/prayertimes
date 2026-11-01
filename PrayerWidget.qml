@@ -664,14 +664,6 @@ PluginComponent {
         label: root.secLabel
     }
 
-    // How far a place's clock is from ours, in a few words.
-    function offsetText(place) {
-        var d = place.zoneOffset + new Date(nowMs).getTimezoneOffset() / 60
-        if (Math.abs(d) < 1 / 120) return "same time"
-        var h = Math.floor(Math.abs(d)), m = Math.round((Math.abs(d) - h) * 60)
-        return (h > 0 ? h + "h" : "") + (h > 0 && m > 0 ? " " : "") + (m > 0 ? m + "m" : "")
-             + (d > 0 ? " ahead" : " behind")
-    }
 
     // === Display helpers ===
     function formatTime(time24h) {
@@ -1726,7 +1718,7 @@ PluginComponent {
                                 color: Theme.surfaceVariantText
                                 text: (there.label !== "" ? there.label.split(",")[0] + "  " : "")
                                       + (!isNaN(there.zoneOffset)
-                                         ? "<b>" + there.zoneClock(there.now) + "</b>  \u00b7  " + root.offsetText(there)
+                                         ? "<b>" + there.zoneClock(there.now) + "</b>"
                                          : (there.zoneLoading ? "checking the time\u2026" : "time unknown"))
                             }
                         }
