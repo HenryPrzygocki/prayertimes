@@ -154,6 +154,10 @@ PluginComponent {
         property var zoneTable: null
         property real zoneValidUntil: 0
         property bool zoneLoading: false
+        // Where the zone name found for these coordinates is remembered, so a
+        // restart needs no network ("" for a place that keeps none).
+        property string zoneCacheKey: ""
+        property var pendingXhr: null
         readonly property real zoneOffset: root.zoneOffsetAt(zoneTable, now)
 
         // Out of range is treated as unset: a latitude of 95 is a typo, and
@@ -300,6 +304,7 @@ PluginComponent {
                 if (!table) {
                     console.warn("prayerTimes: tzdata has no zone", z)
                     zoneName = ""
+                    rememberZone("")   // ask again rather than trust it
                     retry.restart()
                     return
                 }
@@ -308,13 +313,36 @@ PluginComponent {
             }, 0)
         }
 
+        // The name remembered for these exact coordinates, or "".
+        function cachedZone(key) {
+            if (!zoneCacheKey) return ""
+            var c = String(root.pluginData[zoneCacheKey] || "")
+            var i = c.indexOf("=")
+            return i > 0 && c.slice(0, i) === key ? c.slice(i + 1) : ""
+        }
+
+        function rememberZone(value) {
+            if (zoneCacheKey && root.pluginService)
+                root.pluginService.savePluginData(root.pluginId, zoneCacheKey, value)
+        }
+
         function findZoneName() {
-            zoneLoading = true
             var key = lat.toFixed(4) + "," + lon.toFixed(4)
+            var known = cachedZone(key)
+            if (known !== "") {
+                zoneName = known
+                readZone()
+                return
+            }
+            zoneLoading = true
             var xhr = new XMLHttpRequest()
+            pendingXhr = xhr
             xhr.onreadystatechange = function () {
                 if (xhr.readyState !== XMLHttpRequest.DONE)
                     return
+                if (xhr !== pendingXhr)
+                    return   // given up on by the watchdog
+                pendingXhr = null
                 zoneLoading = false
                 if (key !== lat.toFixed(4) + "," + lon.toFixed(4)) {
                     readZone()   // the place moved while this was out
@@ -327,6 +355,7 @@ PluginComponent {
                 } catch (e) {}
                 if (tz !== "" && tz !== "GMT") {
                     zoneName = tz
+                    rememberZone(key + "=" + tz)
                     readZone()
                     return
                 }
@@ -338,11 +367,28 @@ PluginComponent {
             xhr.send()
         }
 
-        // Offline at startup, say: try again in five minutes, not at midnight.
+        // Offline at startup, say: try again in a minute, not at midnight.
         Timer {
             id: retry
-            interval: 300000
+            interval: 60000
             onTriggered: place.readZone()
+        }
+
+        // A request that never answers -- sent while the network was still
+        // coming up, it can stall with no error at all -- is given up on, so
+        // the retry above gets its turn. It once held "checking the time"
+        // up for hours.
+        Timer {
+            interval: 20000
+            running: place.zoneLoading
+            onTriggered: {
+                var x = place.pendingXhr
+                place.pendingXhr = null
+                place.zoneLoading = false
+                if (x) x.abort()
+                console.warn("prayerTimes: zone lookup timed out; retrying")
+                retry.restart()
+            }
         }
 
         function computeDays(dates, offsets) {
@@ -605,6 +651,7 @@ PluginComponent {
     Place {
         id: there
         showsOwnClock: true
+        zoneCacheKey: "secZoneCache"
         lat: root.secLat
         lon: root.secLon
         method: root.secMethod
