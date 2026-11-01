@@ -86,9 +86,15 @@ PluginComponent {
     // first second is shown. Set from a handler, not bound: the countdowns
     // are read off the clock this sets, which as a binding is a loop.
     property bool fineClock: false
-    onNowMsChanged: fineClock = Math.min(here.nextTotalSeconds || Infinity, here.spanRemainingSec || Infinity,
-                                         there.nextTotalSeconds || Infinity, there.spanRemainingSec || Infinity) <= 660
-                                || pillJustStarted
+    onNowMsChanged: {
+        var fine = Math.min(here.nextTotalSeconds || Infinity, here.spanRemainingSec || Infinity,
+                            there.nextTotalSeconds || Infinity, there.spanRemainingSec || Infinity) <= 660
+                   || pillJustStarted
+        // Later, not now: switching precision makes the clock tick at once,
+        // which inside this very notification Qt reports as a binding loop.
+        if (fine !== fineClock)
+            Qt.callLater(function () { root.fineClock = fine })
+    }
 
     // What the pill shows. For five minutes after a prayer begins it says how
     // long ago, "−3m 12s", beside that prayer's symbol, in the accent colour;
