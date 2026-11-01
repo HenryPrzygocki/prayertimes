@@ -163,6 +163,10 @@ PluginComponent {
         // Where the zone name found for these coordinates is remembered, so a
         // restart needs no network ("" for a place that keeps none).
         property string zoneCacheKey: ""
+        // Read every time here off the clock there instead of ours. A view
+        // choice, toggled from the popout; it needs the zone to be known.
+        property bool onOwnClock: false
+        readonly property bool readsOwnClock: onOwnClock && !isNaN(zoneOffset)
         property var pendingXhr: null
         readonly property real zoneOffset: root.zoneOffsetAt(zoneTable, now)
 
@@ -616,13 +620,18 @@ PluginComponent {
             return Math.round((ms - now) / 1000)
         }
 
-        // An instant on the system's clock, in the user's 12/24-hour style.
-        // With `marked`, a time falling on another day than today is tagged +1
-        // or -1: read off our clock, a far place's day can begin last night.
+        // An instant on the clock the place is read off -- the system's, or
+        // the one there -- in the user's 12/24-hour style. With `marked`, a
+        // time falling on another day than that clock's today is tagged +1 or
+        // -1: read off our clock, a far place's day can begin last night.
         function clockText(ms, marked) {
             if (ms === null || ms === undefined || isNaN(ms)) return ""
-            var text = root.formatTime(root.toHHMM(root.wallHours(ms, offsetAt(ms))))
-            return marked ? text + dayMark(civilDate(ms), civilDate(now)) : text
+            if (readsOwnClock) {
+                var text = zoneClock(ms)
+                return marked ? text : text.replace(/ [+\u2212]\d+$/, "")
+            }
+            var sys = root.formatTime(root.toHHMM(root.wallHours(ms, offsetAt(ms))))
+            return marked ? sys + dayMark(civilDate(ms), civilDate(now)) : sys
         }
 
         // The same instant on the clock there, tagged against that clock's
@@ -663,7 +672,6 @@ PluginComponent {
         method: root.secMethod
         label: root.secLabel
     }
-
 
     // === Display helpers ===
     function formatTime(time24h) {
@@ -1187,12 +1195,11 @@ PluginComponent {
         required property var place
         spacing: Theme.spacingS
 
-        // Every time here is on the system's clock. A second place with a
-        // zone also shows its own clock, quieter, in a third column; the
-        // other columns move left to make room for it.
+        // Every time here is on the system's clock, unless a second place is
+        // switched to its own (the chip above the table). Like the tab, that
+        // goes back to ours whenever the popout opens.
         readonly property bool remote: place !== here
-        readonly property bool showsZone: remote && !isNaN(place.zoneOffset)
-        readonly property int colShift: showsZone ? 64 : 0
+        readonly property bool canSwitchClock: remote && !isNaN(place.zoneOffset)
 
         // A row tapped to ask how long until it comes round. Forgotten when
         // the tab changes or the popout reopens, like the tab itself.
@@ -1200,7 +1207,11 @@ PluginComponent {
         onPlaceChanged: picked = ""
         Connections {
             target: root
-            function onInteractionActiveChanged() { if (root.interactionActive) view.picked = "" }
+            function onInteractionActiveChanged() {
+                if (!root.interactionActive) return
+                view.picked = ""
+                there.onOwnClock = false
+            }
         }
 
         // --- Nothing to compute from ---
@@ -1290,19 +1301,64 @@ PluginComponent {
                     height: 16
                     visible: view.place.located
 
-                    StyledText {
+                    Row {
                         anchors.left: parent.left
-                        anchors.leftMargin: 12
+                        anchors.leftMargin: 8
                         anchors.verticalCenter: parent.verticalCenter
-                        text: view.place.focusDay === 0 ? "yesterday" : ""
-                        font.pixelSize: Theme.fontSizeSmall - 2
-                        font.italic: true
-                        color: Theme.primary
+                        spacing: Theme.spacingS
+
+                        // Which clock the times below are on; tap to swap.
+                        StyledRect {
+                            visible: view.canSwitchClock
+                            width: clockChip.implicitWidth + 14
+                            height: 16
+                            radius: 8
+                            anchors.verticalCenter: parent.verticalCenter
+                            color: Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b,
+                                           clockArea.containsMouse ? 0.20 : 0.10)
+
+                            Row {
+                                id: clockChip
+                                anchors.centerIn: parent
+                                spacing: 3
+
+                                DIcon {
+                                    name: "swap_horiz"
+                                    size: 11
+                                    color: Theme.primary
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+                                StyledText {
+                                    text: view.place.onOwnClock
+                                          ? (view.place.label.split(",")[0] || "local") + " time" : "your time"
+                                    font.pixelSize: Theme.fontSizeSmall - 2
+                                    color: Theme.primary
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+                            }
+
+                            MouseArea {
+                                id: clockArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: view.place.onOwnClock = !view.place.onOwnClock
+                            }
+                        }
+
+                        StyledText {
+                            visible: text !== ""
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: view.place.focusDay === 0 ? "yesterday" : ""
+                            font.pixelSize: Theme.fontSizeSmall - 2
+                            font.italic: true
+                            color: Theme.primary
+                        }
                     }
 
                     StyledText {
                         anchors.right: parent.right
-                        anchors.rightMargin: 84 + view.colShift
+                        anchors.rightMargin: 84
                         anchors.verticalCenter: parent.verticalCenter
                         text: "opens"
                         font.pixelSize: Theme.fontSizeSmall - 2
@@ -1311,21 +1367,10 @@ PluginComponent {
 
                     StyledText {
                         anchors.right: parent.right
-                        anchors.rightMargin: 12 + view.colShift
+                        anchors.rightMargin: 12
                         anchors.verticalCenter: parent.verticalCenter
                         text: "closes"
                         font.pixelSize: Theme.fontSizeSmall - 2
-                        color: Theme.surfaceVariantText
-                    }
-
-                    StyledText {
-                        visible: view.showsZone
-                        anchors.right: parent.right
-                        anchors.rightMargin: 12
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: "there"
-                        font.pixelSize: Theme.fontSizeSmall - 2
-                        font.italic: true
                         color: Theme.surfaceVariantText
                     }
                 }
@@ -1431,7 +1476,7 @@ PluginComponent {
                             StyledText {
                                 visible: !modelData.marker
                                 anchors.right: parent.right
-                                anchors.rightMargin: 84 + view.colShift
+                                anchors.rightMargin: 84
                                 anchors.verticalCenter: parent.verticalCenter
                                 text: view.place.clockText(modelData.start, view.remote)
                                 font.pixelSize: Theme.fontSizeSmall
@@ -1443,7 +1488,7 @@ PluginComponent {
                             StyledText {
                                 visible: !modelData.marker
                                 anchors.right: parent.right
-                                anchors.rightMargin: 12 + view.colShift
+                                anchors.rightMargin: 12
                                 anchors.verticalCenter: parent.verticalCenter
                                 text: modelData.end !== null ? view.place.clockText(modelData.end, view.remote) : ""
                                 font.pixelSize: Theme.fontSizeSmall
@@ -1457,27 +1502,12 @@ PluginComponent {
                             // columns rather than pretending to be an opening.
                             StyledText {
                                 visible: modelData.marker
-                                x: parent.width - 122 - view.colShift + (110 - width) / 2
+                                x: parent.width - 122 + (110 - width) / 2
                                 anchors.verticalCenter: parent.verticalCenter
                                 text: view.place.clockText(modelData.start, view.remote)
                                 font.pixelSize: Theme.fontSizeSmall
                                 color: Theme.surfaceText
                                 opacity: row.isPast ? 0.45 : 0.8
-                            }
-
-                            // The same opening on the clock there, smaller and
-                            // quieter: the system's clock is what is acted on,
-                            // this is for reference.
-                            StyledText {
-                                visible: view.showsZone
-                                anchors.right: parent.right
-                                anchors.rightMargin: 12
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: view.place.zoneClock(modelData.start)
-                                font.pixelSize: Theme.fontSizeSmall - 1
-                                font.italic: true
-                                color: Theme.surfaceVariantText
-                                opacity: row.isPast ? 0.6 : 1
                             }
                         }
 

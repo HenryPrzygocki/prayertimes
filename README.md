@@ -22,8 +22,8 @@ prayer times, computed locally from the sun's position.
   than at the following dawn. Both leave a stretch with no prayer due, and the widget says so
   outright rather than going blank.
 - **A second location**, on its own tab in the popout: somewhere else to keep an eye on, worked
-  out exactly as the main one is, with every time on your system's clock, and each also shown,
-  smaller, on the clock there. The widget asks open-meteo which zone the place is in, once; the
+  out exactly as the main one is, with every time on your system's clock, or, at a tap, on the
+  clock there. The widget asks open-meteo which zone the place is in, once; the
   offset comes from the system's own tzdata, so a change in the rules there arrives with the next
   tzdata update rather than whenever a web service catches up. The bar keeps following the main
   location.

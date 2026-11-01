@@ -389,7 +389,7 @@ PluginSettings {
 
             StyledText {
                 width: parent.width
-                text: "Somewhere else to keep an eye on — family, or a trip. It gets its own tab in the popout, worked out exactly as the main location is, with every time on your clock. The bar keeps following the main location."
+                text: "Somewhere else to keep an eye on — family, or a trip. It gets its own tab in the popout, worked out exactly as the main location is, with every time on your clock, or at a tap on the clock there. The bar keeps following the main location."
                 font.pixelSize: Theme.fontSizeSmall
                 color: Theme.surfaceVariantText
                 wrapMode: Text.WordWrap
